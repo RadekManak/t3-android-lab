@@ -301,14 +301,27 @@ def stop(owner=None):
     return {'stopped': True, 'data_preserved': True}
 
 
-def prepare(worktree, owner, config):
+def register_demo_project():
+    # The T3 CLI refuses to write state while a server owns it, so register in a one-off container.
+    demo = subprocess.run(['podman','run','--rm','--network=none','--userns=keep-id:uid=1000,gid=1000','--user=1000:1000',
+                           '--cap-drop=all','--security-opt=no-new-privileges','-v',f'{VOLUME}:/home/node:U',IMAGE,
+                           'node','/opt/t3/dist/bin.mjs','project','add','--base-dir','/home/node/t3-state','--title','Sandbox Demo','/home/node/projects/demo'],
+                          capture_output=True,text=True)
+    message = demo.stdout + demo.stderr
+    if demo.returncode and 'ProjectAlreadyExistsError:' not in message:
+        raise RuntimeError('Could not register the synthetic demo project: ' + message.strip())
+
+
+def prepare(worktree, owner, config, skip_native=False):
     validate_worktree(worktree, config)
     claim(worktree, owner)
     worktree_setup(worktree, config)
     stop_metro()
     build(worktree, config, owner)
     systemctl('start', f'{SERVICE}-bridge.service')
-    systemctl('restart', f'{SERVICE}-backend.service')
+    systemctl('stop', f'{SERVICE}-backend.service')
+    register_demo_project()
+    systemctl('start', f'{SERVICE}-backend.service')
     systemctl('start', f'{SERVICE}-connect.timer')
     connect(config)
     units = Path.home() / '.config/systemd/user'
@@ -327,11 +340,8 @@ StandardError=inherit
 ''')
     systemctl('daemon-reload')
     systemctl('restart', f'{SERVICE}-metro.service')
-    run(executable('vp'), 'run', 'mobile:install', 'android', config['serial'], cwd=worktree)
-    demo = subprocess.run(['podman','exec',CONTAINER,'node','/opt/t3/dist/bin.mjs','project','add','--base-dir','/home/node/t3-state','--title','Sandbox Demo','/home/node/projects/demo'],capture_output=True,text=True)
-    message = demo.stdout + demo.stderr
-    if demo.returncode and 'ProjectAlreadyExistsError:' not in message:
-        raise RuntimeError('Could not register the synthetic demo project: ' + message.strip())
+    if not skip_native:
+        run(executable('vp'), 'run', 'mobile:install', 'android', config['serial'], cwd=worktree)
     return {'owner': owner, 'worktree': str(worktree), 'metro': f'http://127.0.0.1:{config["metro_port"]}',
             'backend': f'http://127.0.0.1:{config["backend_port"]}', 'next': 'Use device_open and launch with its returned AgentDevice command. Run pair if this backend is not saved on the phone.'}
 
@@ -398,6 +408,7 @@ def main():
         p.add_argument('worktree', nargs='?', default=Path.cwd(), type=expand)
         if name == 'prepare':
             p.add_argument('--owner', required=True)
+            p.add_argument('--skip-native', action='store_true', help='Keep the installed native client instead of installing or building one. Use for JS-only changes when no cached client matches.')
         if name == 'build':
             p.add_argument('--owner', help='Required when this thread owns an active reservation.')
     p = command('release', 'Release this owner reservation and stop its Metro.', 't3-android-lab release --owner <thread-id>')
@@ -436,7 +447,7 @@ def main():
             if args.action == 'install': result = install(config)
             elif args.action == 'worktree-setup': result = worktree_setup(args.worktree, config)
             elif args.action == 'build': result = build(args.worktree, config, args.owner)
-            elif args.action == 'prepare': result = prepare(args.worktree, args.owner, config)
+            elif args.action == 'prepare': result = prepare(args.worktree, args.owner, config, args.skip_native)
             elif args.action == 'stop': result = stop(args.owner)
             elif args.action == 'auth-import': result = auth_import(args.file)
             elif args.action == 'pair': result = pair(args.agent_device, config, args.owner)

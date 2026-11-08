@@ -18,7 +18,7 @@ Run `status` first. The phone is shared across threads and machines. Reserve it 
 <lab-command> wait-ready
 ```
 
-`prepare` builds the isolated backend from this worktree, switches Metro to the same checkout, installs the matching cached native client, and restores ADB forwards. A reservation owned by another thread blocks the switch. Leave it alone and report the current owner.
+`prepare` builds the isolated backend from this worktree, switches Metro to the same checkout, installs the matching cached native client, and restores ADB forwards. A reservation owned by another thread blocks the switch. Leave it alone and report the current owner. When no cached client matches and the change is JS-only, pass `--skip-native` to keep the installed client; a native build needs more memory than this host has.
 
 If dependency setup is still running, wait for it. Otherwise install missing checkout dependencies with `vp i --frozen-lockfile` before preparing the device.
 

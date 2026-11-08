@@ -66,7 +66,7 @@ bin/t3-android-lab prepare <worktree> --owner <thread-id>
 bin/t3-android-lab wait-ready
 ```
 
-`prepare` builds a sanitized backend image from this worktree, restarts the sandbox, switches Metro, installs the native client matching the checkout's fingerprint, and restores ADB forwarding. The default ports are 8081 for Metro and 13775 for the backend. The container itself listens on loopback port 13774 in its separate network namespace.
+`prepare` builds a sanitized backend image from this worktree, restarts the sandbox, switches Metro, installs the native client matching the checkout's fingerprint, and restores ADB forwarding. The default ports are 8081 for Metro and 13775 for the backend. The container itself listens on loopback port 13774 in its separate network namespace. When no cached client matches and the change is JS-only, pass `--skip-native` to keep the installed client; a native build needs more memory than this host has.
 
 Build logs and Metro logs live under `.state/logs`. A missing dependency installation or a running T3 worktree setup must be resolved before preparing the phone. An existing reservation owned by another thread blocks switching. The same owner may retry preparation in the same worktree after a failure.
 
