@@ -295,7 +295,8 @@ def stop(owner=None):
         loaded = systemctl('show', unit, '--property=LoadState', '--value', capture=True)
         if loaded != 'not-found':
             systemctl('stop', unit)
-            systemctl('reset-failed', unit)
+            if systemctl('show', unit, '--property=ActiveState', '--value', capture=True) == 'failed':
+                systemctl('reset-failed', unit)
     (STATE / 'session.json').unlink(missing_ok=True)
     return {'stopped': True, 'data_preserved': True}
 
