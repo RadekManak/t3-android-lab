@@ -1,11 +1,13 @@
 ---
 name: t3-android-lab
-description: Verify T3 Code Android changes on the shared physical phone using its isolated backend and Codex login. Use for Android testing, worktree switching, pairing recovery, or sandbox diagnostics in T3 Code worktrees.
+description: Preferred workflow for testing T3 Code Android on the configured shared phone. Use before upstream test-t3-mobile for phone testing, worktree switching, pairing recovery, or sandbox diagnostics. Keeps the backend isolated with synthetic data and its own Codex login.
 ---
 
 # T3 Code Android lab
 
 This skill is linked only into registered T3 Code worktrees. Resolve this file's symlink to find the lab repository. The CLI is `<lab-repository>/bin/t3-android-lab`; read its `--help` for commands. Machine settings are in that repository's ignored `config.local.json`.
+
+For the shared phone, start with this skill. It takes precedence over upstream `test-t3-mobile` for reservations, backend and data isolation, Metro, builds and installation, pairing, and cleanup. Consult upstream only for Device panel and AgentDevice controls or UI test procedures, using this lab's sandbox connection and synthetic fixtures.
 
 ## Prepare a worktree
 
