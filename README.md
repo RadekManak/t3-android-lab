@@ -52,7 +52,7 @@ In the T3 Code project's **Settings → Actions**, add the command below. Enable
 /home/your-user/git/t3-android-lab/bin/t3-android-lab worktree-setup .
 ```
 
-Use the absolute path returned by `realpath bin/t3-android-lab` on this machine. Actions are stored per T3 project. Preserve any existing worktree setup actions when adding this one.
+Use the absolute path returned by `realpath bin/t3-android-lab` on this machine. Actions are stored per T3 project. Preserve any existing worktree setup actions when adding this one. Configure a project-specific Actions override when the project inherits global settings. On installations with `projectSettingsFolded` enabled, updating the project record's `scripts` field alone does not change the effective actions; the override lives in `projectSettingsOverrides[projectId].defaultProjectScripts`.
 
 The action links `.agents/skills/t3-android-lab` to this repository's skill and excludes that link through the repository's local Git exclude file. It verifies the Git common directory matches the configured T3 Code checkout. It rejects unrelated repositories. No upstream T3 Code files change.
 
