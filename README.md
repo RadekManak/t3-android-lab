@@ -24,7 +24,7 @@ systemctl --user start t3-android-lab-backend.service
 bin/t3-android-lab auth-import ~/.codex/auth.json
 ```
 
-After changing ports or moving this repository, rerun `install` and `prepare` to regenerate service paths and restart the bridge.
+After changing ports or moving this repository, rerun `install` and `prepare` to regenerate service paths and restart the bridge. If the old location left a skill symlink behind, remove that link before rerunning `worktree-setup`.
 
 `config.local.json` belongs to this machine and is ignored by Git. `config.example.json` shows its fields. The Codex path must resolve to a native ELF binary rather than a shell or JavaScript wrapper. `build` uses the Node version and runtime dependency versions from the selected T3 Code checkout.
 

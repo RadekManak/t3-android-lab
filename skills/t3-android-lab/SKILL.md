@@ -24,6 +24,8 @@ If dependency setup is still running, wait for it. Otherwise install missing che
 
 Use the repository's `test-t3-mobile` skill for T3 Device panel interaction. Call `device_open` with the configured ADB device, and use only its returned bound AgentDevice command for app launches, links, taps, input and screenshots.
 
+If the screen is asleep, use the returned command's `hardware-button wake`, then swipe up to dismiss the phone's swipe lock.
+
 Read Metro's port from `status`. Through the returned AgentDevice command, open `com.t3tools.t3code.dev` with the development-client URL for `http://127.0.0.1:<metro-port>`. Append `disableOnboarding=1&disableAutoLaunch=1&disableFab=1`. A cold `--relaunch` can recover a blank screen after Metro was interrupted.
 
 If the sandbox is not already saved on the phone, run:

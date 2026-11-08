@@ -282,13 +282,17 @@ def check_owner(owner, worktree=None):
             raise RuntimeError('Phone is reserved by ' + session['owner'] + '; release it or use the owning thread and worktree.')
 
 
+def stop_metro():
+    metro_active = subprocess.run(['systemctl', '--user', 'is-active', '--quiet', f'{SERVICE}-metro.service']).returncode == 0
+    if metro_active:
+        systemctl('stop', f'{SERVICE}-metro.service')
+
+
 def prepare(worktree, owner, config):
     validate_worktree(worktree, config)
     claim(worktree, owner)
     worktree_setup(worktree, config)
-    metro_active = subprocess.run(['systemctl', '--user', 'is-active', '--quiet', f'{SERVICE}-metro.service']).returncode == 0
-    if metro_active:
-        systemctl('stop', f'{SERVICE}-metro.service')
+    stop_metro()
     build(worktree, config, owner)
     systemctl('start', f'{SERVICE}-bridge.service')
     systemctl('restart', f'{SERVICE}-backend.service')
@@ -425,7 +429,7 @@ def main():
                 else:
                     previous = json.loads(session.read_text())
                     if previous['owner'] != args.owner: raise RuntimeError('Reservation belongs to ' + previous['owner'])
-                    systemctl('stop', f'{SERVICE}-metro.service')
+                    stop_metro()
                     session.unlink()
                     result = {'released': True, 'owner': args.owner}
             output(result)
