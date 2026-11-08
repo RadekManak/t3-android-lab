@@ -32,7 +32,7 @@ Enable user lingering if the services must start without an interactive login. O
 
 ### Pair the phone
 
-On the phone, install and sign into Tailscale, enable Developer options and Wireless debugging, and keep the phone on a Wi-Fi network. Enable Stay awake while charging and exempt Tailscale from battery restrictions.
+On the phone, install and sign into Tailscale, enable Developer options and Wireless debugging, and keep the phone on a Wi-Fi network. Use a long finite screen timeout, keep Stay awake while charging disabled, and exempt Tailscale from battery restrictions. The configured Samsung A54 supports a 10-minute timeout.
 
 Pair this host once using `adb pair <phone-address:pairing-port>`. Enter the temporary code through the secure terminal prompt. The pairing port differs from the connection port saved in the lab configuration. Pairing is per host ADB key. Wireless debugging may choose a new connection port after it restarts; update `configure --serial` if that happens.
 
