@@ -46,4 +46,4 @@ Read `docs/isolation.md` in the lab repository when inspecting the boundary. Use
 
 ## Release
 
-When testing is finished, run `release --owner <thread-id>`. This stops the reserved Metro and releases the phone. The sandbox backend and automatic ADB reconnection remain available. An interrupted owner can resume with the same ID or release that reservation explicitly before another thread uses the phone.
+When testing is finished, close the AgentDevice session you opened using its returned bound command with `close`, then run `release --owner <thread-id>` even if device cleanup failed. AgentDevice ownership and the lab reservation are separate; releasing only the reservation leaves the device locked to your session. The lab release stops the reserved Metro and frees its reservation. The sandbox backend and automatic ADB reconnection remain available. An interrupted owner can resume with the same ID or release that reservation explicitly before another thread uses the phone.
