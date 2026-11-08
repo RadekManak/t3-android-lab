@@ -55,6 +55,8 @@ class WorktreeTests(unittest.TestCase):
             lab.claim(self.repo,'thread-b')
         with self.assertRaisesRegex(RuntimeError,'another worktree'):
             lab.claim(self.root / 'another','thread-a')
+        with self.assertRaisesRegex(RuntimeError,'reserved'):
+            lab.stop('thread-b')
         self.assertEqual((self.state / 'session.json').read_text(),original)
 
     def test_existing_skill_is_preserved(self):

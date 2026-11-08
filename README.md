@@ -88,6 +88,17 @@ bin/t3-android-lab release --owner <thread-id>
 
 Release stops Metro and frees the reservation. The sandbox backend remains available. An interrupted thread's reservation is retained so another thread cannot silently take over its phone.
 
+## Stop the lab
+
+```bash
+bin/t3-android-lab stop
+bin/t3-android-lab status
+```
+
+`stop` shuts down Metro, the backend container, the host bridge, and the ADB reconnect timer. It preserves the home volume, Codex login, images, phone pairing, and installed client. Repeating it is safe. An active reservation requires its owner's `--owner <thread-id>`. Close your own AgentDevice session first if you opened one.
+
+The next `prepare` restarts the runtime and reconnect timer. Services configured for boot still start after a host reboot.
+
 ## Move to another machine
 
 Clone this repository and repeat machine setup, device pairing, and the T3 project action. Authenticate Codex on the new host and import only its login file. Create fresh synthetic state rather than copying an old container home volume.

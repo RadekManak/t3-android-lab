@@ -288,6 +288,18 @@ def stop_metro():
         systemctl('stop', f'{SERVICE}-metro.service')
 
 
+def stop(owner=None):
+    check_owner(owner)
+    for suffix in ['connect.timer', 'connect.service', 'metro.service', 'backend.service', 'bridge.service']:
+        unit = f'{SERVICE}-{suffix}'
+        loaded = systemctl('show', unit, '--property=LoadState', '--value', capture=True)
+        if loaded != 'not-found':
+            systemctl('stop', unit)
+            systemctl('reset-failed', unit)
+    (STATE / 'session.json').unlink(missing_ok=True)
+    return {'stopped': True, 'data_preserved': True}
+
+
 def prepare(worktree, owner, config):
     validate_worktree(worktree, config)
     claim(worktree, owner)
@@ -296,6 +308,7 @@ def prepare(worktree, owner, config):
     build(worktree, config, owner)
     systemctl('start', f'{SERVICE}-bridge.service')
     systemctl('restart', f'{SERVICE}-backend.service')
+    systemctl('start', f'{SERVICE}-connect.timer')
     connect(config)
     units = Path.home() / '.config/systemd/user'
     (units / f'{SERVICE}-metro.service').write_text(f'''[Unit]
@@ -362,7 +375,7 @@ def status(config):
     session = STATE / 'session.json'
     return {'repository': str(ROOT), 'session': json.loads(session.read_text()) if session.exists() else None,
             'serial': config['serial'], 'backend_port': config['backend_port'], 'metro_port': config['metro_port'],
-            'container': json.loads(run('podman', 'inspect', CONTAINER, capture=True))[0]['State']['Status'],
+            'container': run('podman', 'ps', '-a', '--filter', f'name=^{CONTAINER}$', '--format', '{{.State}}', capture=True) or 'absent',
             'services': {name: subprocess.run(['systemctl', '--user', 'is-active', f'{SERVICE}-{name}.service'],capture_output=True,text=True).stdout.strip() for name in ['backend','bridge','metro']}}
 
 
@@ -388,6 +401,8 @@ def main():
             p.add_argument('--owner', help='Required when this thread owns an active reservation.')
     p = command('release', 'Release this owner reservation and stop its Metro.', 't3-android-lab release --owner <thread-id>')
     p.add_argument('--owner', required=True)
+    p = command('stop', 'Stop lab services and reconnect timer; preserve data and credentials.', 't3-android-lab stop')
+    p.add_argument('--owner', help='Required when this thread owns an active reservation.')
     p = command('auth-import', 'Copy only a ChatGPT Codex login into the sandbox.', 't3-android-lab auth-import ~/.codex/auth.json')
     p.add_argument('file', type=expand)
     p = command('pair', 'Open a fresh sandbox pairing route using the bound AgentDevice command.', 't3-android-lab pair --agent-device <returned-command>')
@@ -421,6 +436,7 @@ def main():
             elif args.action == 'worktree-setup': result = worktree_setup(args.worktree, config)
             elif args.action == 'build': result = build(args.worktree, config, args.owner)
             elif args.action == 'prepare': result = prepare(args.worktree, args.owner, config)
+            elif args.action == 'stop': result = stop(args.owner)
             elif args.action == 'auth-import': result = auth_import(args.file)
             elif args.action == 'pair': result = pair(args.agent_device, config, args.owner)
             elif args.action == 'release':
