@@ -1,0 +1,14 @@
+ARG NODE_VERSION=26.12.1
+FROM docker.io/library/node:${NODE_VERSION}-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git curl socat python3 ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/t3
+COPY package.json ./
+RUN npm install --omit=dev --ignore-scripts && npm cache clean --force
+COPY dist ./dist
+COPY codex /usr/local/bin/codex
+COPY start.sh /usr/local/bin/start-sandbox
+RUN chmod 755 /usr/local/bin/codex /usr/local/bin/start-sandbox
+ENV HOME=/home/node CODEX_HOME=/home/node/.codex T3CODE_HOME=/home/node/t3-state T3CODE_DEV_SEED=0 HTTPS_PROXY=http://127.0.0.1:3128 HTTP_PROXY=http://127.0.0.1:3128 NO_PROXY=127.0.0.1,localhost
+USER node
+WORKDIR /home/node
+CMD ["/usr/local/bin/start-sandbox"]
