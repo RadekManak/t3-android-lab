@@ -91,10 +91,18 @@ class DiscoveryTests(unittest.TestCase):
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
 
-    def test_saves_the_port_adb_accepts_and_waits_before_scanning_again(self):
-        with patch.object(lab, 'open_ports', return_value=[35000, 40773]) as scan, \
+    def test_saves_the_port_adb_accepts(self):
+        with patch.object(lab, 'open_ports', return_value=[35000, 40773]), \
              patch.object(lab, 'adb_ready', side_effect=lambda adb, serial, attach=False: serial.endswith(':40773')):
             self.assertEqual(lab.discover_serial(dict(self.config)), '100.64.0.1:40773')
-            self.assertIsNone(lab.discover_serial(dict(self.config)))
-        scan.assert_called_once()
         self.assertEqual(json.loads(self.config_path.read_text())['serial'], '100.64.0.1:40773')
+
+    def test_timer_never_scans_and_leaves_an_unreserved_phone_alone(self):
+        with patch.object(lab, 'open_ports') as scan, patch.object(lab, 'adb_ready', return_value=False) as ready:
+            self.assertEqual(lab.keep_alive(dict(self.config)), {'idle': True})
+            ready.assert_not_called()
+            (lab.STATE).mkdir(parents=True, exist_ok=True)
+            (lab.STATE / 'session.json').write_text('{}')
+            with self.assertRaises(RuntimeError):
+                lab.keep_alive(dict(self.config))
+        scan.assert_not_called()

@@ -193,7 +193,7 @@ Description=Restore Android lab ADB connection and forwards
 
 [Service]
 Type=oneshot
-ExecStart={unit_quote(ROOT / 'bin/t3-android-lab')} connect
+ExecStart={unit_quote(ROOT / 'bin/t3-android-lab')} keep-alive
 TimeoutStartSec=40
 ''')
     (units / f'{SERVICE}-connect.timer').write_text(f'''[Unit]
@@ -243,15 +243,9 @@ def open_ports(host, ports, timeout=1.5, concurrency=800):
 
 # Wireless debugging picks a new port after each reboot or toggle, and mDNS does not cross Tailscale.
 ADB_PORTS = range(30000, 61000)
-DISCOVERY_INTERVAL = 300
 
 
 def discover_serial(config):
-    marker = STATE / 'adb-discovery'
-    if marker.exists() and time.time() - marker.stat().st_mtime < DISCOVERY_INTERVAL:
-        return None
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.touch()
     host = config['serial'].rsplit(':', 1)[0]
     for port in open_ports(host, ADB_PORTS):
         serial = f'{host}:{port}'
@@ -261,13 +255,13 @@ def discover_serial(config):
     return None
 
 
-def connect(config):
+def connect(config, discover=True):
     adb, serial = config['adb'], config['serial']
     if not adb_ready(adb, serial) and not adb_ready(adb, serial, attach=True):
-        serial = discover_serial(config)
+        serial = discover_serial(config) if discover else None
         if serial is None:
             raise RuntimeError('Phone is not connected. Turn on Wireless debugging and keep it on Tailscale; '
-                               'the lab finds a new port on its own, at most every five minutes.')
+                               + ('no port on the phone accepted ADB.' if discover else 'run connect to find its new port.'))
         config['serial'] = serial
     forwards = run(adb, '-s', serial, 'reverse', '--list', capture=True).splitlines()
     for port in [config['metro_port'], config['backend_port']]:
@@ -444,6 +438,13 @@ def wait_ready(config):
     raise RuntimeError(f'Metro did not become ready; inspect {STATE / "logs/metro.log"}.')
 
 
+def keep_alive(config):
+    # The timer only maintains a reserved phone on its saved port; scanning costs megabytes, so agents ask for it.
+    if not (STATE / 'session.json').exists():
+        return {'idle': True}
+    return connect(config, discover=False)
+
+
 def status(config):
     session = STATE / 'session.json'
     return {'repository': str(ROOT), 'session': json.loads(session.read_text()) if session.exists() else None,
@@ -482,7 +483,7 @@ def main():
     p = command('pair', 'Open a fresh sandbox pairing route using the bound AgentDevice command.', 't3-android-lab pair --agent-device <returned-command>')
     p.add_argument('--agent-device', required=True, type=expand)
     p.add_argument('--owner', required=True)
-    for name, help in [('verify','Check actual sandbox isolation without running inference.'),('connect','Restore the saved ADB connection and forwards.'),('status','Show the owner, container, and services.'),('wait-ready','Wait up to one minute for Metro to be ready.')]:
+    for name, help in [('verify','Check actual sandbox isolation without running inference.'),('connect','Restore the ADB connection and forwards, scanning for a new port when the saved one fails.'),('keep-alive','Reconnect a reserved phone on its saved port; used by the timer.'),('status','Show the owner, container, and services.'),('wait-ready','Wait up to one minute for Metro to be ready.')]:
         command(name, help, f't3-android-lab {name}')
     args = parser.parse_args()
     try:
@@ -501,6 +502,8 @@ def main():
             run(sys.executable, ROOT / 'lib/verify.py'); return
         if args.action == 'connect':
             output(connect(config)); return
+        if args.action == 'keep-alive':
+            output(keep_alive(config)); return
         if args.action == 'status':
             output(status(config)); return
         if args.action == 'wait-ready':
