@@ -247,11 +247,15 @@ ADB_PORTS = range(30000, 61000)
 
 def discover_serial(config):
     host = config['serial'].rsplit(':', 1)[0]
-    for port in open_ports(host, ADB_PORTS):
-        serial = f'{host}:{port}'
-        if adb_ready(config['adb'], serial, attach=True):
-            save_json(CONFIG, {**load_config(), 'serial': serial})
-            return serial
+    # adbd often reopens its port a few seconds after a network change, so look twice.
+    for attempt in range(2):
+        if attempt:
+            time.sleep(10)
+        for port in open_ports(host, ADB_PORTS):
+            serial = f'{host}:{port}'
+            if adb_ready(config['adb'], serial, attach=True):
+                save_json(CONFIG, {**load_config(), 'serial': serial})
+                return serial
     return None
 
 
