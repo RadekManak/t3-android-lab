@@ -120,3 +120,7 @@ The verifier checks actual container mounts, capabilities, synthetic project roo
 Codex usage limits are account limits. A successful login does not guarantee another inference request is available. Renew credentials with `auth-import` only when authentication needs renewal. Credentials are never synchronized back to the host.
 
 AI assistance: gpt-6.1-sol — implementation, documentation, and automated verification.
+
+## Wake a device on the phone's network
+
+`t3-android-lab wake <mac>` sends a Wake-on-LAN magic packet from the phone onto the Wi-Fi network it is on. The phone's own `nc` cannot broadcast, so the lab builds a small sender from `tools/wol` with Go, copies it to `/data/local/tmp` when it changed, and sends to both `255.255.255.255` and the Wi-Fi subnet's broadcast address. The target needs Wake-on-LAN enabled in its firmware or network settings. It needs no reservation, since it does not touch Metro.

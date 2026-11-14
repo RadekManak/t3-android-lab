@@ -2,6 +2,7 @@ import argparse
 import asyncio
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -485,6 +486,33 @@ def wait_ready(config):
     raise RuntimeError(f'Metro did not become ready; inspect {STATE / "logs/metro.log"}.')
 
 
+PHONE_WOL = '/data/local/tmp/t3-wol'
+
+
+def wake(config, mac):
+    if not re.fullmatch(r'(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}', mac):
+        raise RuntimeError('Expected a MAC address such as aa:bb:cc:dd:ee:ff.')
+    serial = connect(config)['connected']
+    adb = [config['adb'], '-s', serial]
+    binary = STATE / 'wol-arm64'
+    source = ROOT / 'tools/wol'
+    if not binary.exists() or binary.stat().st_mtime < max(f.stat().st_mtime for f in source.iterdir()):
+        run(executable('go'), 'build', '-trimpath', '-ldflags=-s -w', '-o', binary, '.', cwd=source,
+            env={**os.environ, 'CGO_ENABLED': '0', 'GOOS': 'linux', 'GOARCH': 'arm64'})
+    local = hashlib.sha256(binary.read_bytes()).hexdigest()
+    remote = subprocess.run([*adb, 'shell', f'sha256sum {PHONE_WOL} 2>/dev/null'], capture_output=True, text=True).stdout.split()
+    if not remote or remote[0] != local:
+        run(*adb, 'push', binary, PHONE_WOL, capture=True)
+        run(*adb, 'shell', f'chmod 755 {PHONE_WOL}', capture=True)
+    # 255.255.255.255 may leave through the VPN, so also target the Wi-Fi subnet's own broadcast address.
+    wifi = run(*adb, 'shell', 'ip -4 addr show wlan0', capture=True)
+    broadcast = re.search(r'\bbrd (\S+)', wifi)
+    if broadcast is None:
+        raise RuntimeError('The phone is not on Wi-Fi, so it cannot reach a local network to wake.')
+    sent = run(*adb, 'shell', PHONE_WOL, mac, broadcast.group(1), capture=True)
+    return {'woke': mac, 'via': serial, 'broadcast': broadcast.group(1), 'result': sent}
+
+
 def keep_alive(config):
     # The timer only maintains a reserved phone on its saved port; scanning costs megabytes, so agents ask for it.
     path = STATE / 'session.json'
@@ -530,6 +558,8 @@ def main():
     p = command('extend', 'Extend this owner reservation from now.', 't3-android-lab extend --owner <thread-id> --hours 2')
     p.add_argument('--owner', required=True)
     p.add_argument('--hours', type=hours, default=RESERVATION_HOURS)
+    p = command('wake', "Send a Wake-on-LAN packet from the phone onto its Wi-Fi network.", 't3-android-lab wake aa:bb:cc:dd:ee:ff')
+    p.add_argument('mac')
     command('free', 'Print one line when the phone is not reserved; print nothing otherwise. For t3-watch.', 't3-android-lab free')
     p = command('release', 'Release this owner reservation and stop its Metro.', 't3-android-lab release --owner <thread-id>')
     p.add_argument('--owner', required=True)
@@ -566,6 +596,8 @@ def main():
         if args.action == 'free':
             if line := free(): print(line)
             return
+        if args.action == 'wake':
+            output(wake(config, args.mac)); return
         if args.action == 'extend':
             output(extend(args.owner, args.hours)); return
         if args.action == 'wait-ready':
