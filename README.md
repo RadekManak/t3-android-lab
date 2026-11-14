@@ -34,7 +34,7 @@ Enable user lingering if the services must start without an interactive login. O
 
 On the phone, install and sign into Tailscale, enable Developer options and Wireless debugging, and keep the phone on a Wi-Fi network. Use a long finite screen timeout, keep Stay awake while charging disabled, and exempt Tailscale from battery restrictions. The configured Samsung A54 supports a 10-minute timeout.
 
-Pair this host once using `adb pair <phone-address:pairing-port>`. Enter the temporary code through the secure terminal prompt. The pairing port differs from the connection port saved in the lab configuration. Pairing is per host ADB key. Wireless debugging may choose a new connection port after it restarts; update `configure --serial` if that happens.
+Pair this host once using `adb pair <phone-address:pairing-port>`. Enter the temporary code through the secure terminal prompt. The pairing port differs from the connection port saved in the lab configuration. Pairing is per host ADB key. Wireless debugging chooses a new connection port after a reboot or toggle. When the saved port stops answering, `connect` scans the phone's Tailscale address for it and saves the new port, at most once every five minutes.
 
 Other T3 installations can use this machine as a configured remote device host. Alternatively, pair each device host directly. A single phone remains a shared resource; coordinate reservations across hosts before switching it. The local reservation file coordinates threads on this device host, not independent installations on other hosts.
 

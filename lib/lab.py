@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 from contextlib import contextmanager
 import fcntl
 import json
@@ -212,14 +213,62 @@ WantedBy=timers.target
     return {'installed': True, 'repository': str(ROOT), 'state': str(STATE)}
 
 
+def adb_ready(adb, serial, attach=False):
+    if attach:
+        try:
+            subprocess.run([adb, 'connect', serial], capture_output=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            return False
+    state = subprocess.run([adb, '-s', serial, 'get-state'], capture_output=True, text=True, timeout=5)
+    return not state.returncode and state.stdout.strip() == 'device'
+
+
+def open_ports(host, ports, timeout=1.5, concurrency=800):
+    async def probe(port, gate, found):
+        async with gate:
+            try:
+                _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+                writer.close()
+                found.append(port)
+            except (OSError, asyncio.TimeoutError):
+                pass
+
+    async def scan():
+        gate, found = asyncio.Semaphore(concurrency), []
+        await asyncio.gather(*(probe(port, gate, found) for port in ports))
+        return sorted(found)
+
+    return asyncio.run(scan())
+
+
+# Wireless debugging picks a new port after each reboot or toggle, and mDNS does not cross Tailscale.
+ADB_PORTS = range(30000, 61000)
+DISCOVERY_INTERVAL = 300
+
+
+def discover_serial(config):
+    marker = STATE / 'adb-discovery'
+    if marker.exists() and time.time() - marker.stat().st_mtime < DISCOVERY_INTERVAL:
+        return None
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+    host = config['serial'].rsplit(':', 1)[0]
+    for port in open_ports(host, ADB_PORTS):
+        serial = f'{host}:{port}'
+        if adb_ready(config['adb'], serial, attach=True):
+            save_json(CONFIG, {**load_config(), 'serial': serial})
+            return serial
+    return None
+
+
 def connect(config):
     adb, serial = config['adb'], config['serial']
-    state = subprocess.run([adb, '-s', serial, 'get-state'], capture_output=True, text=True, timeout=5)
-    if state.returncode or state.stdout.strip() != 'device':
-        subprocess.run([adb, 'connect', serial], check=True, capture_output=True, timeout=15)
-        result = subprocess.run([adb, '-s', serial, 'get-state'], check=True, capture_output=True, text=True, timeout=5)
-        if result.stdout.strip() != 'device':
-            raise RuntimeError('Phone is not connected. Check Tailscale and its Wireless debugging connection port.')
+    if not adb_ready(adb, serial) and not adb_ready(adb, serial, attach=True):
+        serial = discover_serial(config)
+        if serial is None:
+            raise RuntimeError('Phone is not connected. Turn on Wireless debugging and keep it on Tailscale; '
+                               'the lab finds a new port on its own, at most every five minutes.')
+        config['serial'] = serial
     forwards = run(adb, '-s', serial, 'reverse', '--list', capture=True).splitlines()
     for port in [config['metro_port'], config['backend_port']]:
         if not any(line.split()[-2:] == [f'tcp:{port}', f'tcp:{port}'] for line in forwards):

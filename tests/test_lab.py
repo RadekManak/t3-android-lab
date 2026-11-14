@@ -77,3 +77,24 @@ class WorktreeTests(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+
+
+class DiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.config_path = root / 'config.local.json'
+        self.config = {'adb': 'adb', 'serial': '100.64.0.1:33767', 'checkout': '/t3'}
+        self.config_path.write_text(json.dumps(self.config))
+        self.patcher = patch.multiple(lab, STATE=root / '.state', CONFIG=self.config_path)
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
+    def test_saves_the_port_adb_accepts_and_waits_before_scanning_again(self):
+        with patch.object(lab, 'open_ports', return_value=[35000, 40773]) as scan, \
+             patch.object(lab, 'adb_ready', side_effect=lambda adb, serial, attach=False: serial.endswith(':40773')):
+            self.assertEqual(lab.discover_serial(dict(self.config)), '100.64.0.1:40773')
+            self.assertIsNone(lab.discover_serial(dict(self.config)))
+        scan.assert_called_once()
+        self.assertEqual(json.loads(self.config_path.read_text())['serial'], '100.64.0.1:40773')
