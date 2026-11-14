@@ -31,6 +31,18 @@ def run(*args, cwd=None, capture=False, input=None, env=None):
     return result.stdout.strip() if capture else None
 
 
+# Default native builds exhaust this 12 GB host: one Kotlin daemon per Kotlin version, and ninja runs nproc+2 clang jobs.
+# A capped scope is killed instead of freezing the host, and two cores keep ninja at three jobs.
+NATIVE_BUILD_LIMITS = ('systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=5G', '-p', 'MemorySwapMax=1G',
+                       'taskset', '-c', '0-1')
+
+
+def native_build_env():
+    return {**os.environ,
+            'GRADLE_OPTS': r'-Dorg.gradle.jvmargs=-Xmx2g\ -XX:MaxMetaspaceSize=768m -Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false',
+            'ORG_GRADLE_PROJECT_kotlin.compiler.execution.strategy': 'in-process'}
+
+
 def output(value):
     print(json.dumps(value, ensure_ascii=False))
 
@@ -341,7 +353,8 @@ StandardError=inherit
     systemctl('daemon-reload')
     systemctl('restart', f'{SERVICE}-metro.service')
     if not skip_native:
-        run(executable('vp'), 'run', 'mobile:install', 'android', config['serial'], cwd=worktree)
+        run(*NATIVE_BUILD_LIMITS, executable('vp'), 'run', 'mobile:install', 'android', config['serial'], cwd=worktree,
+            env=native_build_env())
     return {'owner': owner, 'worktree': str(worktree), 'metro': f'http://127.0.0.1:{config["metro_port"]}',
             'backend': f'http://127.0.0.1:{config["backend_port"]}', 'next': 'Use device_open and launch with its returned AgentDevice command. Run pair if this backend is not saved on the phone.'}
 
