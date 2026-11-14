@@ -102,7 +102,32 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(lab.keep_alive(dict(self.config)), {'idle': True})
             ready.assert_not_called()
             (lab.STATE).mkdir(parents=True, exist_ok=True)
-            (lab.STATE / 'session.json').write_text('{}')
+            lab.claim('/w', 'thread-a')
             with self.assertRaises(RuntimeError):
                 lab.keep_alive(dict(self.config))
         scan.assert_not_called()
+
+
+class ReservationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.state = Path(self.temporary.name) / '.state'
+        self.state.mkdir()
+        self.patcher = patch.multiple(lab, STATE=self.state, stop_metro=lambda: None)
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
+    def test_owner_extends_others_wait_and_expiry_frees_the_phone(self):
+        lab.claim('/w/a', 'thread-a', duration=1)
+        self.assertEqual(lab.free(), '')
+        with self.assertRaisesRegex(RuntimeError, 'reserved by thread-a'):
+            lab.claim('/w/b', 'thread-b')
+        with self.assertRaises(RuntimeError):
+            lab.extend('thread-b', 1)
+        self.assertGreater(lab.extend('thread-a', 3)['expires_in_minutes'], 170)
+        with patch.object(lab.time, 'time', return_value=lab.time.time() + 4 * 3600):
+            self.assertEqual(json.loads(lab.free()), {'free': True})
+            self.assertEqual(lab.keep_alive({}), {'expired': 'thread-a'})
+            lab.claim('/w/b', 'thread-b')
+        self.assertEqual(json.loads((self.state / 'session.json').read_text())['owner'], 'thread-b')

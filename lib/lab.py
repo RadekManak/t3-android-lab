@@ -319,22 +319,65 @@ def build(worktree, config, owner=None):
     return {'image': IMAGE, 'worktree': str(worktree), 'log': str(log)}
 
 
-def claim(worktree, owner):
+RESERVATION_HOURS = 2
+MAX_RESERVATION_HOURS = 12
+
+
+def reservation():
+    """The live reservation, or None when there is none or it has expired."""
     path = STATE / 'session.json'
-    previous = json.loads(path.read_text()) if path.exists() else None
+    if not path.exists():
+        return None
+    session = json.loads(path.read_text())
+    return session if session.get('expires_at', 0) > time.time() else None
+
+
+def hours(value):
+    value = float(value)
+    if not 0 < value <= MAX_RESERVATION_HOURS:
+        raise argparse.ArgumentTypeError(f'choose between 0 and {MAX_RESERVATION_HOURS} hours')
+    return value
+
+
+def reserved_by_other(session):
+    until = time.strftime('%H:%M', time.localtime(session['expires_at']))
+    return RuntimeError(f'Phone is reserved by {session["owner"]} for {session["worktree"]} until {until}. '
+                        'Ask that T3 thread to release it, or wait: t3-android-lab free prints when it is available.')
+
+
+def claim(worktree, owner, duration=RESERVATION_HOURS):
+    previous = reservation()
     if previous and previous['owner'] != owner:
-        raise RuntimeError(f'Phone is reserved by {previous["owner"]} in {previous["worktree"]}. That owner must release it first.')
+        raise reserved_by_other(previous)
     if previous and previous['worktree'] != str(worktree):
         raise RuntimeError('This owner already reserved another worktree. Release it before switching worktrees.')
-    save_json(path, {'owner': owner, 'worktree': str(worktree)})
+    now = time.time()
+    save_json(STATE / 'session.json', {'owner': owner, 'worktree': str(worktree), 'reserved_at': now,
+                                       'expires_at': now + duration * 3600})
+
+
+def extend(owner, duration):
+    session = reservation()
+    if session is None or session['owner'] != owner:
+        raise RuntimeError('Only a live reservation can be extended, by its owner. Run prepare to reserve again.')
+    session['expires_at'] = time.time() + duration * 3600
+    save_json(STATE / 'session.json', session)
+    return describe(session)
+
+
+def describe(session):
+    return {**session, 'expires_in_minutes': round((session['expires_at'] - time.time()) / 60)} if session else None
+
+
+def free():
+    # A t3-watch check: silent while reserved, one line once the phone is available.
+    return '' if reservation() else json.dumps({'free': True})
 
 
 def check_owner(owner, worktree=None):
-    path = STATE / 'session.json'
-    if path.exists():
-        session = json.loads(path.read_text())
-        if session['owner'] != owner or (worktree is not None and session['worktree'] != str(worktree)):
-            raise RuntimeError('Phone is reserved by ' + session['owner'] + '; release it or use the owning thread and worktree.')
+    session = reservation()
+    if session and (session['owner'] != owner or (worktree is not None and session['worktree'] != str(worktree))):
+        raise reserved_by_other(session)
 
 
 def stop_metro():
@@ -367,9 +410,9 @@ def register_demo_project():
         raise RuntimeError('Could not register the synthetic demo project: ' + message.strip())
 
 
-def prepare(worktree, owner, config, skip_native=False):
+def prepare(worktree, owner, config, skip_native=False, duration=RESERVATION_HOURS):
     validate_worktree(worktree, config)
-    claim(worktree, owner)
+    claim(worktree, owner, duration)
     worktree_setup(worktree, config)
     stop_metro()
     build(worktree, config, owner)
@@ -440,14 +483,19 @@ def wait_ready(config):
 
 def keep_alive(config):
     # The timer only maintains a reserved phone on its saved port; scanning costs megabytes, so agents ask for it.
-    if not (STATE / 'session.json').exists():
+    path = STATE / 'session.json'
+    if not path.exists():
         return {'idle': True}
+    if reservation() is None:
+        expired = json.loads(path.read_text())
+        stop_metro()
+        path.unlink()
+        return {'expired': expired['owner']}
     return connect(config, discover=False)
 
 
 def status(config):
-    session = STATE / 'session.json'
-    return {'repository': str(ROOT), 'session': json.loads(session.read_text()) if session.exists() else None,
+    return {'repository': str(ROOT), 'session': describe(reservation()),
             'serial': config['serial'], 'backend_port': config['backend_port'], 'metro_port': config['metro_port'],
             'container': run('podman', 'ps', '-a', '--filter', f'name=^{CONTAINER}$', '--format', '{{.State}}', capture=True) or 'absent',
             'services': {name: subprocess.run(['systemctl', '--user', 'is-active', f'{SERVICE}-{name}.service'],capture_output=True,text=True).stdout.strip() for name in ['backend','bridge','metro']}}
@@ -471,9 +519,14 @@ def main():
         p.add_argument('worktree', nargs='?', default=Path.cwd(), type=expand)
         if name == 'prepare':
             p.add_argument('--owner', required=True)
+            p.add_argument('--hours', type=hours, default=RESERVATION_HOURS, help=f'Reservation length; default {RESERVATION_HOURS}, extend with extend.')
             p.add_argument('--skip-native', action='store_true', help='Keep the installed native client instead of installing or building one. Use for JS-only changes when no cached client matches.')
         if name == 'build':
             p.add_argument('--owner', help='Required when this thread owns an active reservation.')
+    p = command('extend', 'Extend this owner reservation from now.', 't3-android-lab extend --owner <thread-id> --hours 2')
+    p.add_argument('--owner', required=True)
+    p.add_argument('--hours', type=hours, default=RESERVATION_HOURS)
+    command('free', 'Print one line when the phone is not reserved; print nothing otherwise. For t3-watch.', 't3-android-lab free')
     p = command('release', 'Release this owner reservation and stop its Metro.', 't3-android-lab release --owner <thread-id>')
     p.add_argument('--owner', required=True)
     p = command('stop', 'Stop lab services and reconnect timer; preserve data and credentials.', 't3-android-lab stop')
@@ -506,13 +559,18 @@ def main():
             output(keep_alive(config)); return
         if args.action == 'status':
             output(status(config)); return
+        if args.action == 'free':
+            if line := free(): print(line)
+            return
+        if args.action == 'extend':
+            output(extend(args.owner, args.hours)); return
         if args.action == 'wait-ready':
             output(wait_ready(config)); return
         with operation():
             if args.action == 'install': result = install(config)
             elif args.action == 'worktree-setup': result = worktree_setup(args.worktree, config)
             elif args.action == 'build': result = build(args.worktree, config, args.owner)
-            elif args.action == 'prepare': result = prepare(args.worktree, args.owner, config, args.skip_native)
+            elif args.action == 'prepare': result = prepare(args.worktree, args.owner, config, args.skip_native, args.hours)
             elif args.action == 'stop': result = stop(args.owner)
             elif args.action == 'auth-import': result = auth_import(args.file)
             elif args.action == 'pair': result = pair(args.agent_device, config, args.owner)
@@ -521,7 +579,7 @@ def main():
                 if not session.exists(): result = {'released': True, 'already_released': True}
                 else:
                     previous = json.loads(session.read_text())
-                    if previous['owner'] != args.owner: raise RuntimeError('Reservation belongs to ' + previous['owner'])
+                    if reservation() and previous['owner'] != args.owner: raise reserved_by_other(previous)
                     stop_metro()
                     session.unlink()
                     result = {'released': True, 'owner': args.owner}

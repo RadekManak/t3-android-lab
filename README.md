@@ -68,7 +68,7 @@ bin/t3-android-lab wait-ready
 
 `prepare` builds a sanitized backend image from this worktree, restarts the sandbox, switches Metro, installs the native client matching the checkout's fingerprint, and restores ADB forwarding. The default ports are 8081 for Metro and 13775 for the backend. The container itself listens on loopback port 13774 in its separate network namespace. A native build runs on two cores under a 5 GB memory cap so it cannot freeze the host. Pass `--skip-native` to keep the installed client only when it was built from the same base, such as a JS-only change on top of it; a client from an older base fails on launch with a native module error.
 
-Build logs and Metro logs live under `.state/logs`. A missing dependency installation or a running T3 worktree setup must be resolved before preparing the phone. An existing reservation owned by another thread blocks switching. The same owner may retry preparation in the same worktree after a failure.
+Build logs and Metro logs live under `.state/logs`. A missing dependency installation or a running T3 worktree setup must be resolved before preparing the phone. An existing reservation owned by another thread blocks switching. The same owner may retry preparation in the same worktree after a failure. Reservations last two hours by default (`--hours`, at most twelve); the owner renews with `extend`. `free` prints one line only while no reservation holds the phone, which makes it a t3-watch check.
 
 Open the phone through T3's Device panel using `device_open`. Use its returned AgentDevice command for every UI operation. Open T3 Code Dev with this URL, substituting the configured Metro port:
 
@@ -86,7 +86,7 @@ When testing is complete:
 bin/t3-android-lab release --owner <thread-id>
 ```
 
-Release stops Metro and frees the reservation. The sandbox backend remains available. An interrupted thread's reservation is retained so another thread cannot silently take over its phone.
+Release stops Metro and frees the reservation. The sandbox backend remains available. An interrupted thread's reservation is retained until it expires, so another thread cannot silently take over its phone. On expiry the reconnect timer stops its Metro and frees the phone.
 
 ## Stop the lab
 

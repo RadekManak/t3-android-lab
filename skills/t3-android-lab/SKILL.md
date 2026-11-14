@@ -11,14 +11,16 @@ For the shared phone, start with this skill. It takes precedence over upstream `
 
 ## Prepare a worktree
 
-Run `status` first. The phone is shared across threads and machines. Reserve it with a stable owner such as this thread's ID:
+Run `status` first. The phone is shared across threads and machines. Reserve it with your T3 thread ID as the owner, from context or `orchestrator_capabilities().parentThreadId`, so other agents can find the thread that holds it:
 
 ```bash
-<lab-command> prepare <worktree> --owner <thread-id>
+<lab-command> prepare <worktree> --owner <thread-id> [--hours 2]
 <lab-command> wait-ready
 ```
 
-`prepare` builds the isolated backend from this worktree, switches Metro to the same checkout, installs the matching cached native client, and restores ADB forwards. A reservation owned by another thread blocks the switch. Leave it alone and report the current owner. A native build runs on two cores under a 5 GB memory cap so it cannot freeze the host. Pass `--skip-native` to keep the installed client only when it was built from the same base, such as a JS-only change on top of it; a client from an older base fails on launch with a native module error.
+A reservation lasts two hours by default, at most twelve. Run `extend --owner <thread-id> --hours <n>` before it runs out; only the owner can extend. When it expires, the lab stops its Metro and frees the phone within a minute.
+
+`prepare` builds the isolated backend from this worktree, switches Metro to the same checkout, installs the matching cached native client, and restores ADB forwards. A reservation owned by another thread blocks the switch. Do not release it yourself. Read the owning thread with `t3_thread_read` and, if it looks idle or finished, ask it with `t3_thread_send` to release the phone. To continue when the phone frees up, register a one-shot watch on `<lab-command> free`, which prints only when nothing holds the phone: `t3-watch add --thread <thread-id> --name android-phone-free --once --every 2m --expires-in 1d -- <lab-command> free`. A native build runs on two cores under a 5 GB memory cap so it cannot freeze the host. Pass `--skip-native` to keep the installed client only when it was built from the same base, such as a JS-only change on top of it; a client from an older base fails on launch with a native module error.
 
 If dependency setup is still running, wait for it. Otherwise install missing checkout dependencies with `vp i --frozen-lockfile` before preparing the device.
 
