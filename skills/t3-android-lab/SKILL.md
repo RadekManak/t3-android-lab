@@ -7,19 +7,25 @@ description: Onboard and debug remote Android phones and tablets in T3 Code over
 
 This is a global user skill. Resolve this file's symlink to locate the lab repository. Run `<lab-repository>/bin/t3-android-lab --help` to discover commands. Machine settings and device inventory live in that repository's ignored `config.local.json` and `devices.local.json`.
 
+Pass `--json` whenever you parse command output, including under a pseudo-terminal. Terminal output otherwise defaults to readable text. `free` and timer commands always retain JSON output; `verify` prints `PASS` lines.
+
 ## Select the task and device
 
-Read `device list` first. It reads local configuration without contacting devices. Use a named device. Managed entries are available for routine lab work. On-demand entries require the user's explicit request for that particular device, even if it appears online. An offline on-demand device needs no recovery, probing, or health check. Pass `--requested` only when that request exists. Keep personal addresses and device preferences in local configuration or user instructions.
+Read `device list --json` first. It combines the saved inventory with connection states reported by the local ADB server, without connecting to or probing phones. Prefer managed entries for tasks with no named device. Use an on-demand entry when the user selects it; being offline is normal and needs no recovery or health check. Named CLI commands work the same in either mode. Keep device-specific preferences in local configuration or user instructions.
+
+Availability does not describe ownership or data sensitivity. Either mode can contain important user data. Follow the user's task scope for app installs, account access, and data changes.
 
 - For a new device, follow [Onboard an Android device](../../docs/onboarding.md). Complete host registration, secure pairing, connection, and Device panel verification. Configure device-side recovery only for managed devices.
-- For general debugging, use `device connect <name>` and T3's Device tools. On-demand devices also need `--requested`. This path needs no T3 checkout, container, Metro, or Codex authentication. It sets no app port forwards. Read logs with ADB targeted to the connected serial. Close your own AgentDevice session afterward; disconnect an on-demand device when its requested session ends.
+- For general debugging, use `device connect <name>` and T3's Device tools. This path needs no T3 checkout, container, Metro, or Codex authentication. It sets no app port forwards. Read logs with ADB targeted to the connected serial. Close your own AgentDevice session afterward. Disconnect an on-demand device when the requested session ends unless the user wants it left connected.
 - For T3 Code development, use the sandbox workflow below. It takes precedence over `test-t3-mobile` for reservations, backend and data isolation, Metro, native installation, pairing, and cleanup. Consult that skill only for client test procedures when available.
 
-Always use `device_open` and its returned bound AgentDevice command for device interaction. Use ADB for logs, installs, builds, forwarding, and diagnostics the command cannot provide. Port discovery is explicit with `device connect <name> --discover`; timers never scan.
+Always use `device_open` and its returned bound AgentDevice command for device interaction. Use ADB for logs, installs, builds, forwarding, and diagnostics the command cannot provide. A named `device connect <name>` discovers a port if the saved one fails or is missing. Use `--no-discover` to prevent scanning; timers never scan.
+
+For ADB pairing, always pass `--code-file` using the secret file from `request_secret`. The hidden terminal prompt is for a human running the command directly. Avoid entering codes into chat or command arguments.
 
 ## Prepare a T3 worktree
 
-Run sandbox `status` first. Its `serial` selects one phone independently of the device inventory. Check that it is the intended device; selecting an on-demand device requires an explicit request too. The sandbox has one shared backend and Metro per host.
+Run sandbox `status --json` first. Its `serial` selects one phone independently of the device inventory. Check that it is the intended device; selecting an on-demand device requires an explicit request too. The sandbox has one shared backend and Metro per host.
 
 Reserve with your T3 thread ID as owner, obtained from context or `orchestrator_capabilities().parentThreadId`:
 

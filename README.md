@@ -1,10 +1,12 @@
 # T3 Code Android lab
 
-Use Android phones and tablets remotely from agents in T3 Code. Connect over Tailscale and wireless ADB for app interaction, screenshots, and debugging logs. For T3 Code development, reserve a shared phone and run Metro against an isolated backend with synthetic projects and a separate Codex login.
+Use Android phones and tablets remotely in T3 Code. Connect over Tailscale and wireless ADB for app interaction, screenshots, and debugging logs. For T3 Code development, reserve a shared phone and run Metro against an isolated backend with synthetic projects and a separate Codex login.
 
 ## Start with device access
 
 General debugging needs a Linux host with Python 3.9 or newer, Android platform-tools, Tailscale, and T3 Code's Device tools. It does not need Podman, a T3 Code source checkout, Metro, or a Codex login. The sandbox workflow below needs those additional dependencies.
+
+ADB comes from [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools) and stays outside this repository. The lab finds it on `PATH` or in common Android SDK locations. Run `adb version` to check your installation. To choose a specific executable, save it once with `bin/t3-android-lab device adb /path/to/platform-tools/adb`.
 
 Clone this repository, then install the agent skill once for your user:
 
@@ -16,23 +18,51 @@ bin/t3-android-lab skill-install
 
 The default destination is `~/.agents/skills/t3-android-lab`. Use `--directory ~/.codex/skills` for an agent that reads that directory instead. The installed skill links to this checkout, so keep it in place. No project actions or per-worktree skill installation are needed.
 
-Follow [Onboard an Android device](docs/onboarding.md) to pair a device and choose its availability policy. Register each device locally:
+Follow [Onboard an Android device](docs/onboarding.md) to enable Tailscale and Wireless debugging. Register and pair a device locally:
+
+```bash
+bin/t3-android-lab device add phone --host 100.x.x.x
+bin/t3-android-lab device pair phone --pairing-port 38063
+# Enter the six-digit code at the hidden terminal prompt.
+bin/t3-android-lab device connect phone
+bin/t3-android-lab device list
+```
+
+The pairing port comes from Android's pairing-code dialog. The connection port is discovered automatically; it differs from the pairing port. Pairing is needed once per host, unless revoked on the device. New devices default to on-demand. Choose managed availability at registration when you want optional automatic reconnection:
 
 ```bash
 bin/t3-android-lab device add lab-phone --host 100.x.x.x --port 35000 --mode managed
-bin/t3-android-lab device add personal-tablet --host 100.y.y.y --mode on-demand
+bin/t3-android-lab device add tablet --host 100.y.y.y --mode on-demand
 bin/t3-android-lab device list
 bin/t3-android-lab device connect lab-phone
-bin/t3-android-lab device connect personal-tablet --port 36000 --requested
+bin/t3-android-lab device connect tablet --port 36000
 ```
 
-`device list` reads configuration without contacting devices. Managed devices can use the optional `device install` reconnect timer. On-demand devices require a user request for each session and are excluded from that timer, health checks, and default device selection. `--requested` records that intent for a named operation. It is not an authentication mechanism.
+`device list` shows registered devices and their connection states from the local ADB server. It does not scan, connect, or wake phones. Managed devices can use the optional `device install` reconnect timer. On-demand devices are excluded from that timer and connect through the same named commands. These modes describe availability preferences, not device ownership or whether its data can be discarded.
 
-`device connect` uses the saved port or `--port`. Pass `--discover` to scan that one device for a changed port. Neither the managed-device timer nor the sandbox timer scans automatically. These commands create no app port forwards. Use T3's `device_list`, `device_open`, and the returned bound AgentDevice command for UI interaction. Close your own AgentDevice session when finished.
+`device connect <name>` tries the saved port or `--port` first, then scans that named device if necessary and saves the verified port. Use `--no-discover` to disable scanning. Neither the managed-device timer nor the sandbox timer scans automatically. These commands create no app port forwards. Use T3's `device_list`, `device_open`, and the returned bound AgentDevice command for UI interaction. Close your own AgentDevice session when finished.
 
-`device disconnect <name> --requested` disconnects an on-demand device. `device remove <name>` removes its local entry without revoking Android pairing. To revoke access, forget this host on the device's Wireless debugging screen. `device stop` disables the managed-device timer.
+`device disconnect <name>` disconnects a device. `device remove <name>` removes its local entry without revoking Android pairing. To revoke access, forget this host on the device's Wireless debugging screen. `device stop` disables the managed-device timer.
 
 The machine's device inventory is `devices.local.json`. Sandbox settings remain in `config.local.json`. Both are ignored by Git; the example files contain placeholders only.
+
+## Use the commands
+
+Run `bin/t3-android-lab --help` to find a command, then add `--help` to that command for options and examples. `device pair` pairs ADB access. The top-level `pair` connects the Android app to the sandbox backend.
+
+Results use readable text on a terminal and JSON when piped. Agents and scripts that parse results should pass `--json`, including when running in a terminal. Use `--text` to force readable output. Both flags work at any command level; the last one wins.
+
+```bash
+bin/t3-android-lab device list --text
+bin/t3-android-lab device connect --help
+bin/t3-android-lab status --json
+```
+
+`device list` reports ADB connection state, not network reachability. It reads the existing local ADB server without starting or restarting it. A disconnected entry may still be reachable; connect it by name. Matching uses the registered host spelling without DNS lookups. Connections made outside the lab using another IP address or hostname alias may not match. Unsupported or remote ADB server sockets show unknown status.
+
+`status` reports the sandbox reservation and local services; it does not probe the phone. The only prompt is the hidden pairing code, shown when stdin and stderr are terminals and `--code-file` is omitted. Agents use `--code-file <path>` or `--code-file -` to stay noninteractive.
+
+Errors go to stderr, with retry commands where available. Exit codes are 0 for success, 1 for an operation failure, and 2 for invalid arguments. Watcher `free` and timer `keep-alive` commands retain their JSON output regardless of format flags. `verify` always prints its existing `PASS` lines.
 
 ## Set up a machine
 
@@ -131,7 +161,7 @@ The verifier checks actual container mounts, capabilities, synthetic project roo
 
 Codex usage limits are account limits. A successful login does not guarantee another inference request is available. Renew credentials with `auth-import` only when authentication needs renewal. Credentials are never synchronized back to the host.
 
-AI assistance: gpt-6.1-sol — implementation, documentation, and automated verification.
+AI assistance: gpt-6.1-sol — implementation, documentation, and automated verification; claude-opus-5-5 — CLI design.
 
 ## Wake a device on the phone's network
 

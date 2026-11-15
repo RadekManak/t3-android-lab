@@ -6,7 +6,7 @@
       "port": 35000,
       "mode": "managed"
     },
-    "personal-tablet": {
+    "tablet": {
       "host": "100.y.y.y",
       "port": null,
       "mode": "on-demand"
