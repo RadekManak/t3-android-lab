@@ -1,4 +1,15 @@
 /.state/
 /config.local.json
+/*.local.json
+/*.local.json.*.tmp
+/.scratch/
+/.pytest_cache/
+.env
+.env.*
+*.apk
+*.sqlite*
+*.log
+auth.json
+adbkey*
 __pycache__/
 *.pyc

@@ -34,18 +34,18 @@ class WorktreeTests(unittest.TestCase):
         subprocess.run(['git','-C',str(directory),'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','Initial'],check=True)
         return directory
 
-    def test_linked_worktree_gets_ignored_skill_and_other_projects_do_not(self):
-        linked = self.root / 'linked'
-        subprocess.run(['git','-C',str(self.repo),'worktree','add','-qb','test-worktree',str(linked)],check=True)
+    def test_global_skill_install_is_idempotent_and_preserves_other_skills(self):
+        directory = self.root / 'user-skills'
         for _ in range(2):
-            lab.worktree_setup(linked,self.config)
-        target=linked / '.agents/skills/t3-android-lab'
-        self.assertEqual(target.resolve(),self.lab_root / 'skills/t3-android-lab')
-        subprocess.run(['git','-C',str(linked),'check-ignore','-q',str(target)],check=True)
-        other=self.make_repo('other')
-        with self.assertRaisesRegex(RuntimeError,'not part'):
-            lab.worktree_setup(other,self.config)
-        self.assertFalse((other / '.agents/skills').exists())
+            lab.skill_install(directory)
+        target = directory / 't3-android-lab'
+        self.assertEqual(target.resolve(), self.lab_root / 'skills/t3-android-lab')
+        target.unlink()
+        target.mkdir()
+        (target / 'SKILL.md').write_text('Existing skill')
+        with self.assertRaisesRegex(RuntimeError, 'overwrite'):
+            lab.skill_install(directory)
+        self.assertEqual((target / 'SKILL.md').read_text(), 'Existing skill')
 
     def test_reservation_prevents_another_owner_or_worktree_from_switching(self):
         lab.claim(self.repo,'thread-a')
@@ -59,14 +59,6 @@ class WorktreeTests(unittest.TestCase):
             lab.stop('thread-b')
         self.assertEqual((self.state / 'session.json').read_text(),original)
 
-    def test_existing_skill_is_preserved(self):
-        existing=self.repo / '.agents/skills/t3-android-lab'
-        existing.mkdir(parents=True)
-        (existing / 'SKILL.md').write_text('Existing skill')
-        with self.assertRaisesRegex(RuntimeError,'overwrite'):
-            lab.worktree_setup(self.repo,self.config)
-        self.assertEqual((existing / 'SKILL.md').read_text(),'Existing skill')
-
     def test_reserved_image_cannot_be_replaced_by_other_owner_or_worktree(self):
         lab.claim(self.repo,'thread-a')
         lab.check_owner('thread-a',self.repo)
@@ -74,9 +66,6 @@ class WorktreeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'reserved'):
                 lab.build(worktree,self.config,owner)
 
-
-if __name__=='__main__':
-    unittest.main()
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -131,3 +120,7 @@ class ReservationTests(unittest.TestCase):
             self.assertEqual(lab.keep_alive({}), {'expired': 'thread-a'})
             lab.claim('/w/b', 'thread-b')
         self.assertEqual(json.loads((self.state / 'session.json').read_text())['owner'], 'thread-b')
+
+
+if __name__ == '__main__':
+    unittest.main()

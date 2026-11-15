@@ -18,6 +18,6 @@ The container shares the host kernel. This setup restricts filesystem access, pr
 
 ## Files excluded from Git
 
-`config.local.json` contains machine-specific addresses and executable paths. `.state` contains sockets, reservations, temporary image inputs, and logs. Codex authentication and T3 data live in the Podman home volume, outside the repository. Build and backend startup logs can contain pairing credentials and must remain private.
+`config.local.json` contains sandbox addresses and executable paths. `devices.local.json` contains device addresses and availability policies. Both are ignored by Git. `.state` contains sockets, reservations, temporary image inputs, and logs. Codex authentication and T3 data live in the Podman home volume, outside the repository. Build and backend startup logs can contain pairing credentials and must remain private.
 
 The repository deliberately excludes device screenshots, databases, auth files, ADB keys, dependency trees, native APKs, and compiled backend bundles. Rebuild artifacts on each device host.

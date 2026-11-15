@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -33,7 +34,7 @@ def run(*args, cwd=None, capture=False, input=None, env=None):
     return result.stdout.strip() if capture else None
 
 
-# Default native builds exhaust this 12 GB host: one Kotlin daemon per Kotlin version, and ninja runs nproc+2 clang jobs.
+# Kotlin daemons and ninja's nproc+2 clang jobs can exhaust small hosts during native builds.
 # A capped scope is killed instead of freezing the host, and two cores keep ninja at three jobs.
 NATIVE_BUILD_LIMITS = ('systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=5G', '-p', 'MemorySwapMax=1G',
                        'taskset', '-c', '0-1')
@@ -61,10 +62,14 @@ def load_config():
 
 def save_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix('.new')
-    temporary.write_text(json.dumps(value, indent=2) + '\n')
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, prefix=path.name + '.', suffix='.tmp', delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            handle.write(json.dumps(value, indent=2) + '\n')
+            handle.close()
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def git_common(worktree):
@@ -108,9 +113,8 @@ def unit_quote(value):
     return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
 
 
-def worktree_setup(worktree, config):
-    validate_worktree(worktree, config)
-    target = worktree / '.agents/skills/t3-android-lab'
+def skill_install(directory):
+    target = directory / 't3-android-lab'
     source = ROOT / 'skills/t3-android-lab'
     if target.is_symlink():
         if target.resolve() != source:
@@ -120,14 +124,7 @@ def worktree_setup(worktree, config):
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.symlink_to(source, target_is_directory=True)
-    exclude = git_common(worktree) / 'info/exclude'
-    exclude.parent.mkdir(exist_ok=True)
-    contents = exclude.read_text() if exclude.exists() else ''
-    line = '/.agents/skills/t3-android-lab'
-    if line not in contents.splitlines():
-        with exclude.open('a') as handle:
-            handle.write(('\n' if contents and not contents.endswith('\n') else '') + line + '\n')
-    return {'worktree': str(worktree), 'skill': str(target)}
+    return {'skill': str(target), 'scope': 'user'}
 
 
 def install(config):
@@ -418,7 +415,6 @@ def register_demo_project():
 def prepare(worktree, owner, config, skip_native=False, duration=RESERVATION_HOURS):
     validate_worktree(worktree, config)
     claim(worktree, owner, duration)
-    worktree_setup(worktree, config)
     stop_metro()
     build(worktree, config, owner)
     systemctl('start', f'{SERVICE}-bridge.service')
@@ -534,10 +530,14 @@ def status(config):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Project-scoped T3 Code Android sandbox.', epilog='Examples: t3-android-lab status; t3-android-lab prepare . --owner <thread-id>')
+    parser = argparse.ArgumentParser(description='Remote Android debugging and an optional isolated T3 Code sandbox.', epilog='Examples: t3-android-lab device list; t3-android-lab prepare . --owner <thread-id>')
     sub = parser.add_subparsers(dest='action', required=True)
+    import devices
+    devices.parser(sub)
     def command(name, help, example):
         return sub.add_parser(name, help=help, description=help, epilog='Example: ' + example)
+    p = command('skill-install', 'Install the skill once in a global user skill directory.', 't3-android-lab skill-install')
+    p.add_argument('--directory', type=expand, default=Path.home() / '.agents/skills')
     p = command('configure', 'Save this machine configuration.', 't3-android-lab configure --checkout ~/git/t3code --serial 100.x.x.x:38797')
     p.add_argument('--checkout', required=True, type=expand)
     p.add_argument('--serial', required=True)
@@ -546,8 +546,8 @@ def main():
     p.add_argument('--backend-port', type=int, default=13775)
     p.add_argument('--metro-port', type=int, default=8081)
     command('install', 'Install user services and the reconnect timer.', 't3-android-lab install')
-    for name in ['worktree-setup','build','prepare']:
-        p = command(name, {'worktree-setup':'Link the skill only into a registered T3 worktree.','build':'Build a sanitized backend image from a T3 worktree.','prepare':'Reserve the phone and prepare this worktree for testing.'}[name], f't3-android-lab {name} .' + (' --owner <thread-id>' if name=='prepare' else ''))
+    for name in ['build','prepare']:
+        p = command(name, {'build':'Build a sanitized backend image from a T3 worktree.','prepare':'Reserve the phone and prepare this worktree for testing.'}[name], f't3-android-lab {name} .' + (' --owner <thread-id>' if name=='prepare' else ''))
         p.add_argument('worktree', nargs='?', default=Path.cwd(), type=expand)
         if name == 'prepare':
             p.add_argument('--owner', required=True)
@@ -584,6 +584,12 @@ def main():
             save_json(CONFIG, values)
             output({'configured': str(CONFIG)})
             return
+        if args.action == 'skill-install':
+            output(skill_install(args.directory)); return
+        if args.action == 'device':
+            with operation():
+                output(devices.dispatch(args))
+            return
         config = load_config()
         if args.action == 'verify':
             run(sys.executable, ROOT / 'lib/verify.py'); return
@@ -604,7 +610,6 @@ def main():
             output(wait_ready(config)); return
         with operation():
             if args.action == 'install': result = install(config)
-            elif args.action == 'worktree-setup': result = worktree_setup(args.worktree, config)
             elif args.action == 'build': result = build(args.worktree, config, args.owner)
             elif args.action == 'prepare': result = prepare(args.worktree, args.owner, config, args.skip_native, args.hours)
             elif args.action == 'stop': result = stop(args.owner)

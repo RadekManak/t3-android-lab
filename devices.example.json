@@ -1,0 +1,15 @@
+{
+  "adb": "~/android-sdk/platform-tools/adb",
+  "devices": {
+    "lab-phone": {
+      "host": "100.x.x.x",
+      "port": 35000,
+      "mode": "managed"
+    },
+    "personal-tablet": {
+      "host": "100.y.y.y",
+      "port": null,
+      "mode": "on-demand"
+    }
+  }
+}
