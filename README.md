@@ -1,183 +1,55 @@
 # T3 Code Android lab
 
-Use Android phones and tablets remotely in T3 Code. Connect over Tailscale and wireless ADB for app interaction, screenshots, and debugging logs. For T3 Code development, reserve a shared phone and run Metro against an isolated backend with synthetic projects and a separate Codex login.
+Give your T3 Code coding agent access to real Android phones and tablets. This agent-written lab manages pairing and connections. T3 Code's Device tools provide app interaction and screenshots.
 
-## Start with device access
+**T3 Code is required for the supported workflow.** It hosts the coding-agent session and exposes the Device tools the agent uses to open and control devices. The lab's installed skill gives the agent its setup and operating instructions.
 
-General debugging needs a Linux host with Python 3.9 or newer, Android platform-tools, Tailscale, and T3 Code's Device tools. It does not need Podman, a T3 Code source checkout, Metro, or a Codex login. The sandbox workflow below needs those additional dependencies.
+## How it works
 
-ADB comes from [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools) and stays outside this repository. The lab finds it on `PATH` or in common Android SDK locations. Run `adb version` to check your installation. To choose a specific executable, save it once with `bin/t3-android-lab device adb /path/to/platform-tools/adb`.
+The agent runs the lab's Python CLI on a Linux device host. Tailscale provides a private network between that host and the Android device. Paired wireless Android Debug Bridge (ADB) provides debugging access, and the CLI discovers changed connection ports.
 
-Clone this repository, then install the agent skill once for your user:
+T3 Code's Device tools handle app interaction and screenshots. ADB handles logs, installs, and port forwarding. You handle the initial Android settings and authentication until remote access is available.
+
+For T3 Code development, the optional sandbox reserves a shared phone for one worktree and runs an isolated backend with synthetic projects. The backend and app development server run on the Linux host. The Android app connects to them through ADB forwarding.
+
+## System requirements
+
+For device access:
+
+- T3 Code with Device tools available to your coding agent.
+- A Linux device host with Python 3.9 or newer, Git, Android SDK Platform-Tools (`adb`), and Tailscale.
+- An Android phone or tablet with Wireless debugging enabled, connected to Wi-Fi and the same tailnet as the host.
+
+ADB is a host dependency and is not bundled with this repository. Device access does not require a T3 Code source checkout or the optional sandbox.
+
+For the optional development sandbox, also install:
+
+- Rootless Podman 5 or newer with Quadlet and systemd user services.
+- A T3 Code source checkout with dependencies installed, Node.js, and Vite+.
+- A standalone Linux Codex binary with authentication for the isolated backend.
+- Java and the Android SDK when building a native client.
+
+Go is needed only for the optional Wake-on-LAN helper that runs on the phone.
+
+## Get started
+
+Clone the repository on your Linux device host and install the agent skill:
 
 ```bash
-git clone https://github.com/RadekManak/t3-android-lab.git ~/git/t3-android-lab
-cd ~/git/t3-android-lab
+git clone https://github.com/RadekManak/t3-android-lab.git
+cd t3-android-lab
 bin/t3-android-lab skill-install
 ```
 
-The default destination is `~/.agents/skills/t3-android-lab`. Use `--directory ~/.codex/skills` for an agent that reads that directory instead. The installed skill links to this checkout, so keep it in place. No project actions or per-worktree skill installation are needed.
+Ask your T3 Code agent to use the `t3-android-lab` skill to onboard a device. The skill links to this checkout, so keep it in place. Use `--directory ~/.codex/skills` if that is where your agent reads skills.
 
-Follow [Onboard an Android device](docs/onboarding.md) to enable Tailscale and Wireless debugging. Register and pair a device locally:
+- [Device onboarding](docs/onboarding.md): host prerequisites, secure pairing, and optional managed-device recovery.
+- [Setup and operations guide](docs/guide.md): CLI use, sandbox setup, worktree testing, shutdown, and maintenance.
+- [Agent skill](skills/t3-android-lab/SKILL.md): device selection and the agent's working procedure.
+- [Isolation boundary](docs/isolation.md): what the development sandbox can access.
 
-```bash
-bin/t3-android-lab device add phone --host 100.x.x.x
-bin/t3-android-lab device pair phone --pairing-port 38063
-# Enter the six-digit code at the hidden terminal prompt.
-bin/t3-android-lab device connect phone
-bin/t3-android-lab device list
-```
+## License and authorship
 
-The pairing port comes from Android's pairing-code dialog. The connection port is discovered automatically; it differs from the pairing port. Pairing is needed once per host, unless revoked on the device. New devices default to on-demand. Choose managed availability at registration when you want optional automatic reconnection:
+Written primarily by coding agents and intended primarily for coding agents.
 
-```bash
-bin/t3-android-lab device add lab-phone --host 100.x.x.x --port 35000 --mode managed
-bin/t3-android-lab device add tablet --host 100.y.y.y --mode on-demand
-bin/t3-android-lab device list
-bin/t3-android-lab device connect lab-phone
-bin/t3-android-lab device connect tablet --port 36000
-```
-
-`device list` shows registered devices and their connection states from the local ADB server. It does not scan, connect, or wake phones. Managed devices can use the optional `device install` reconnect timer. On-demand devices are excluded from that timer and connect through the same named commands. These modes describe availability preferences, not device ownership or whether its data can be discarded.
-
-`device connect <name>` tries the saved port or `--port` first, then scans that named device if necessary and saves the verified port. Use `--no-discover` to disable scanning. Neither the managed-device timer nor the sandbox timer scans automatically. These commands create no app port forwards. Use T3's `device_list`, `device_open`, and the returned bound AgentDevice command for UI interaction. Close your own AgentDevice session when finished.
-
-`device disconnect <name>` disconnects a device. `device remove <name>` removes its local entry without revoking Android pairing. To revoke access, forget this host on the device's Wireless debugging screen. `device stop` disables the managed-device timer.
-
-The machine's device inventory is `devices.local.json`. Sandbox settings remain in `config.local.json`. Both are ignored by Git; the example files contain placeholders only.
-
-## Use the commands
-
-Run `bin/t3-android-lab --help` to find a command, then add `--help` to that command for options and examples. `device pair` pairs ADB access. The top-level `pair` connects the Android app to the sandbox backend.
-
-Results use readable text on a terminal and JSON when piped. Agents and scripts that parse results should pass `--json`, including when running in a terminal. Use `--text` to force readable output. Both flags work at any command level; the last one wins.
-
-```bash
-bin/t3-android-lab device list --text
-bin/t3-android-lab device connect --help
-bin/t3-android-lab status --json
-```
-
-`device list` reports ADB connection state, not network reachability. It reads the existing local ADB server without starting or restarting it. A disconnected entry may still be reachable; connect it by name. Matching uses the registered host spelling without DNS lookups. Connections made outside the lab using another IP address or hostname alias may not match. Unsupported or remote ADB server sockets show unknown status.
-
-`status` reports the sandbox reservation and local services; it does not probe the phone. The only prompt is the hidden pairing code, shown when stdin and stderr are terminals and `--code-file` is omitted. Agents use `--code-file <path>` or `--code-file -` to stay noninteractive.
-
-Errors go to stderr, with retry commands where available. Exit codes are 0 for success, 1 for an operation failure, and 2 for invalid arguments. Watcher `free` and timer `keep-alive` commands retain their JSON output regardless of format flags. `verify` always prints its existing `PASS` lines.
-
-## Set up a machine
-
-Use a Linux device host with rootless Podman 5 or newer, Quadlet, systemd user services, Python 3.9 or newer, Git, Vite+, Android platform-tools, and a standalone Linux Codex binary. Install the T3 Code checkout's dependencies. Java and the Android SDK are needed when the native client is not available in the shared cache.
-
-Clone this private repository alongside your other checkouts:
-
-```bash
-gh repo clone RadekManak/t3-android-lab ~/git/t3-android-lab
-cd ~/git/t3-android-lab
-bin/t3-android-lab configure \
-  --checkout ~/git/t3code \
-  --serial <phone-tailscale-address:connection-port> \
-  --adb ~/android-sdk/platform-tools/adb \
-  --codex-binary <path-to-standalone-codex>
-bin/t3-android-lab build ~/git/t3code
-bin/t3-android-lab install
-systemctl --user start t3-android-lab-backend.service
-bin/t3-android-lab auth-import ~/.codex/auth.json
-```
-
-After changing ports or moving this repository, rerun `install` and `prepare` to regenerate service paths and restart the bridge. If the old location left a skill symlink behind, remove that link before rerunning `skill-install`.
-
-`config.local.json` belongs to this machine and is ignored by Git. `config.example.json` shows its fields. The Codex path must resolve to a native ELF binary rather than a shell or JavaScript wrapper. `build` uses the Node version and runtime dependency versions from the selected T3 Code checkout.
-
-Enable user lingering if the services must start without an interactive login. On systemd hosts, an administrator can run `loginctl enable-linger "$USER"`. The backend, restricted proxy, and ADB reconnect timer start at boot. Metro starts only when a worktree is reserved.
-
-### Connect the sandbox phone
-
-Complete [device onboarding](docs/onboarding.md) first. Set the sandbox's `--serial` to that phone's Tailscale address and current connection port. The pairing port is different. `connect` and `prepare` can scan for a changed port when explicitly invoked. The sandbox reconnect timer only restores the saved port during an active reservation.
-
-The sandbox has one selected phone, backend, and Metro instance per host. The independent device inventory can hold additional phones and tablets for general debugging. Selecting an on-demand device for sandbox work requires an explicit request too.
-
-Other T3 installations can use this machine as a remote device host. Alternatively, pair each device host directly. Reservations coordinate threads on one device host, so coordinate use explicitly across independent hosts.
-
-## Test a worktree
-
-Reserve the phone with your thread ID or another stable owner name:
-
-```bash
-bin/t3-android-lab status
-bin/t3-android-lab prepare <worktree> --owner <thread-id>
-bin/t3-android-lab wait-ready
-```
-
-`prepare` builds a sanitized backend image from this worktree, restarts the sandbox, switches Metro, installs the native client matching the checkout's fingerprint, and restores ADB forwarding. The default ports are 8081 for Metro and 13775 for the backend. The container itself listens on loopback port 13774 in its separate network namespace. A native build runs on two cores under a 5 GB memory cap so it cannot freeze the host. Pass `--skip-native` to keep the installed client only when it was built from the same base, such as a JS-only change on top of it; a client from an older base fails on launch with a native module error.
-
-Build logs and Metro logs live under `.state/logs`. A missing dependency installation or a running T3 worktree setup must be resolved before preparing the phone. An existing reservation owned by another thread blocks switching. The same owner may retry preparation in the same worktree after a failure. Reservations last two hours by default (`--hours`, at most twelve); the owner renews with `extend`. `free` prints one line only while no reservation holds the phone, which makes it a t3-watch check.
-
-Open the phone through T3's Device panel using `device_open`. Use its returned AgentDevice command for every UI operation. Open T3 Code Dev with this URL, substituting the configured Metro port:
-
-```text
-t3code-dev://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081&disableOnboarding=1&disableAutoLaunch=1&disableFab=1
-```
-
-If the sandbox connection is not saved on the phone, run the lab's `pair` command with the exact bound AgentDevice executable. It creates a short-lived credential and opens the pairing route without printing the credential.
-
-The Sandbox Demo project contains a synthetic README and a local Git repository. It has no remotes. Use this project or create other dummy projects inside the container. The backend volume survives container restarts and image rebuilds.
-
-When testing is complete:
-
-```bash
-bin/t3-android-lab release --owner <thread-id>
-```
-
-Release stops Metro and frees the reservation. The sandbox backend remains available. An interrupted thread's reservation is retained until it expires, so another thread cannot silently take over its phone. On expiry the reconnect timer stops its Metro and frees the phone.
-
-## Stop the lab
-
-```bash
-bin/t3-android-lab stop
-bin/t3-android-lab status
-```
-
-`stop` shuts down Metro, the backend container, the host bridge, and the ADB reconnect timer. It preserves the home volume, Codex login, images, phone pairing, and installed client. Repeating it is safe. An active reservation requires its owner's `--owner <thread-id>`. Close your own AgentDevice session first if you opened one.
-
-The next `prepare` restarts the runtime and reconnect timer. Services configured for boot still start after a host reboot.
-
-## Move to another machine
-
-Clone this repository and repeat machine setup, device pairing, and global skill installation. Authenticate Codex on the new host and import only its login file. Create fresh synthetic state rather than copying an old container home volume.
-
-The native-client fingerprint cache is managed by T3 Code. The setup does not require copying Android build outputs, ADB private keys, Codex history, T3 state, or other credentials into Git.
-
-## Check and recover
-
-```bash
-bin/t3-android-lab verify
-python3 tests/test_bridge.py
-python3 -m unittest discover -s tests -p 'test_*.py'
-systemctl --user status t3-android-lab-backend.service t3-android-lab-bridge.service
-systemctl --user restart t3-android-lab-backend.service
-```
-
-The verifier checks actual container mounts, capabilities, synthetic project roots, blocked direct routes, proxy restrictions, and allowed OpenAI HTTPS. It does not run paid inference. Follow [the isolation reference](docs/isolation.md) before changing the container boundary.
-
-Codex usage limits are account limits. A successful login does not guarantee another inference request is available. Renew credentials with `auth-import` only when authentication needs renewal. Credentials are never synchronized back to the host.
-
-AI assistance: gpt-6.1-sol — implementation, documentation, and automated verification; claude-opus-5-5 — CLI design.
-
-## Wake a device on the phone's network
-
-`t3-android-lab wake <mac>` sends a Wake-on-LAN magic packet from the phone onto the Wi-Fi network it is on. The phone's own `nc` cannot broadcast, so the lab builds a small sender from `tools/wol` with Go, copies it to `/data/local/tmp` when it changed, and sends to both `255.255.255.255` and the Wi-Fi subnet's broadcast address. The target needs Wake-on-LAN enabled in its firmware or network settings. It needs no reservation, since it does not touch Metro.
-
-## Check publication contents
-
-Install [Gitleaks](https://github.com/gitleaks/gitleaks), then run:
-
-```bash
-python3 scripts/audit-publication.py
-python3 -m unittest discover -s tests -p 'test_*.py' -v
-```
-
-The audit scans all reachable Git history and a snapshot of tracked and unignored files. It also checks that local configuration, runtime state, and common credential files stay excluded. Review any findings before publishing. Passing a secret scanner does not prove the absence of every private value.
-
-## License
-
-This repository is [MIT licensed](LICENSE). T3 Code, Codex, KeepADB, Tailscale, and other tools retain their own licenses. Their binaries and credentials are not included here.
+[MIT licensed](LICENSE). T3 Code, Codex, KeepADB, Tailscale, and other dependencies retain their own licenses. Their binaries and credentials are not included here.
