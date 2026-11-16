@@ -40,8 +40,9 @@ NATIVE_BUILD_LIMITS = ('systemd-run', '--user', '--scope', '--quiet', '-p', 'Mem
                        'taskset', '-c', '0-1')
 
 
-def native_build_env():
+def native_build_env(adb):
     return {**os.environ,
+            'PATH': str(Path(adb).parent) + os.pathsep + os.environ.get('PATH', ''),
             'GRADLE_OPTS': r'-Dorg.gradle.jvmargs=-Xmx2g\ -XX:MaxMetaspaceSize=768m -Dorg.gradle.workers.max=2 -Dorg.gradle.parallel=false',
             'ORG_GRADLE_PROJECT_kotlin.compiler.execution.strategy': 'in-process'}
 
@@ -79,6 +80,8 @@ def command(sub, name, help, *examples):
 
 def output(value, args):
     key = args.action + (' ' + args.device_action if args.action == 'device' else '')
+    if args.action == 'sandbox':
+        key = args.sandbox_action
     machine_only = key in {'keep-alive', 'device keep-alive'}
     output_format = getattr(args, 'output_format', None) or ('text' if sys.stdout.isatty() else 'json')
     if machine_only or output_format == 'json':
@@ -119,7 +122,7 @@ def adb_executable(value):
 def load_config():
     if not CONFIG.exists():
         raise LabError('Sandbox is not configured (config.local.json is missing). Device commands work without it.',
-                       't3-android-lab configure --checkout ~/git/t3code --serial <tailscale-ip:connection-port>',
+                       't3-android-lab sandbox setup --checkout ~/git/t3code --device <name> --auth-file ~/.codex/auth.json',
                        't3-android-lab device list')
     return json.loads(CONFIG.read_text())
 
@@ -155,7 +158,7 @@ def operation():
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise LabError('Another lab operation is running. Retry after it completes.', 't3-android-lab status')
+            raise LabError('Another lab operation is running. Retry after it completes.', 't3-android-lab sandbox status')
         yield
 
 
@@ -189,6 +192,48 @@ def skill_install(directory):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.symlink_to(source, target_is_directory=True)
     return {'skill': str(target), 'scope': 'user'}
+
+
+def sandbox_configuration(args):
+    import devices
+    values = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+    for key in ['checkout', 'device', 'serial', 'adb', 'codex_binary', 'backend_port', 'metro_port']:
+        value = getattr(args, key, None)
+        if value is not None:
+            values[key] = str(value) if isinstance(value, Path) else value
+    if getattr(args, 'device', None):
+        values.pop('serial', None)
+        values.pop('adb', None)
+    elif getattr(args, 'serial', None):
+        values.pop('device', None)
+    values.setdefault('codex_binary', str(expand(shutil.which('codex') or '~/.local/bin/codex')))
+    values.setdefault('backend_port', 13775)
+    values.setdefault('metro_port', 8081)
+    if not values.get('checkout') or not (values.get('device') or values.get('serial')):
+        raise LabError('Sandbox setup needs a T3 checkout and a registered device.',
+                       't3-android-lab sandbox setup --checkout ~/git/t3code --device <name> --auth-file ~/.codex/auth.json', exit_code=2)
+    git_common(expand(values['checkout']))
+    if values.get('device'):
+        inventory = devices.load()
+        devices.get(inventory, values['device'])
+        if getattr(args, 'adb', None):
+            raise LabError('Set the shared ADB path in the device inventory.', 't3-android-lab device adb <path>', exit_code=2)
+        values.pop('adb', None)
+        values.pop('serial', None)
+    else:
+        if not re.fullmatch(r'[A-Za-z0-9.\-]+:[0-9]{1,5}', values['serial']) or not 1 <= int(values['serial'].rsplit(':', 1)[1]) <= 65535:
+            raise LabError('Expected a host:port wireless ADB serial.', exit_code=2)
+        values['adb'] = adb_executable(values.get('adb') or devices.load()['adb'])
+    if not all(1024 <= values[key] <= 65535 for key in ['backend_port', 'metro_port']) or values['backend_port'] == values['metro_port']:
+        raise LabError('Metro and backend ports must be distinct and between 1024 and 65535.', exit_code=2)
+    return values
+
+
+def sandbox_device(config):
+    import devices
+    inventory = devices.load()
+    device = devices.get(inventory, config['device'])
+    return inventory, device
 
 
 def install(config):
@@ -255,7 +300,7 @@ Description=Restore Android lab ADB connection and forwards
 
 [Service]
 Type=oneshot
-ExecStart={unit_quote(ROOT / 'bin/t3-android-lab')} keep-alive
+ExecStart={unit_quote(ROOT / 'bin/t3-android-lab')} sandbox keep-alive
 TimeoutStartSec=40
 ''')
     (units / f'{SERVICE}-connect.timer').write_text(f'''[Unit]
@@ -322,13 +367,20 @@ def discover_serial(config):
 
 
 def connect(config, discover=True):
-    adb, serial = config['adb'], config['serial']
-    if not adb_ready(adb, serial) and not adb_ready(adb, serial, attach=True):
+    if config.get('device'):
+        import devices
+        inventory, _ = sandbox_device(config)
+        serial = devices.connect(inventory, config['device'], discover=discover)['connected']
+        adb = inventory['adb']
+        config.update(adb=adb, serial=serial)
+    else:
+        adb, serial = config['adb'], config['serial']
+    if not config.get('device') and not adb_ready(adb, serial) and not adb_ready(adb, serial, attach=True):
         serial = discover_serial(config) if discover else None
         if serial is None:
             raise LabError('Phone is not connected. Turn on Wireless debugging and keep it on Tailscale; '
                            + ('no port on the phone accepted ADB.' if discover else 'run connect to find its new port.'),
-                           't3-android-lab connect')
+                           't3-android-lab sandbox connect')
         config['serial'] = serial
     forwards = run(adb, '-s', serial, 'reverse', '--list', capture=True).splitlines()
     for port in [config['metro_port'], config['backend_port']]:
@@ -337,14 +389,11 @@ def connect(config, discover=True):
     return {'connected': serial, 'reverse_ports': [config['metro_port'], config['backend_port']]}
 
 
-def build(worktree, config, owner=None):
-    check_owner(owner, worktree)
+def validate_build(worktree, config):
     validate_worktree(worktree, config)
     marker = worktree / '.t3/setup-running'
     if marker.exists():
         raise RuntimeError('T3 worktree setup is marked as running. Wait for setup completion before building.')
-    context = STATE / 'image'
-    context.mkdir(parents=True, exist_ok=True)
     codex = expand(config['codex_binary'])
     with codex.open('rb') as handle:
         if handle.read(4) != b'\x7fELF':
@@ -355,6 +404,14 @@ def build(worktree, config, owner=None):
     node_version = package['engines']['node']
     if not re.fullmatch(r'\d+\.\d+\.\d+', node_version):
         raise RuntimeError('Expected an exact Node version in the T3 Code package.json engines.node field.')
+    return codex, node_version
+
+
+def build(worktree, config, owner=None):
+    check_owner(owner, worktree)
+    codex, node_version = validate_build(worktree, config)
+    context = STATE / 'image'
+    context.mkdir(parents=True, exist_ok=True)
     config_file = STATE / 'build.mjs'
     vite = (worktree / 'node_modules/vite-plus/dist/index.js').as_uri()
     pack_api = (worktree / 'node_modules/vite-plus/dist/pack.js').as_uri()
@@ -409,8 +466,8 @@ def hours(value):
 def reserved_by_other(session):
     until = time.strftime('%H:%M', time.localtime(session['expires_at']))
     return LabError(f'Phone is reserved by {session["owner"]} for {session["worktree"]} until {until}. '
-                    'Ask that T3 thread to release it, or wait: t3-android-lab free prints when it is available.',
-                    't3-android-lab status', 't3-android-lab free')
+                    'Ask that T3 thread to release it, or wait: t3-android-lab sandbox free prints when it is available.',
+                    't3-android-lab sandbox status', 't3-android-lab sandbox free')
 
 
 def claim(worktree, owner, duration=RESERVATION_HOURS):
@@ -419,7 +476,7 @@ def claim(worktree, owner, duration=RESERVATION_HOURS):
         raise reserved_by_other(previous)
     if previous and previous['worktree'] != str(worktree):
         raise LabError('This owner already reserved another worktree. Release it before switching worktrees.',
-                       f't3-android-lab release --owner {shlex.quote(owner)}')
+                       f't3-android-lab sandbox release --owner {shlex.quote(owner)}')
     now = time.time()
     save_json(STATE / 'session.json', {'owner': owner, 'worktree': str(worktree), 'reserved_at': now,
                                        'expires_at': now + duration * 3600})
@@ -429,7 +486,7 @@ def extend(owner, duration):
     session = reservation()
     if session is None or session['owner'] != owner:
         raise LabError('Only a live reservation can be extended, by its owner. Run prepare to reserve again.',
-                       f't3-android-lab prepare <worktree> --owner {shlex.quote(owner)} --hours {duration:g}')
+                       f't3-android-lab sandbox prepare <worktree> --owner {shlex.quote(owner)} --hours {duration:g}')
     session['expires_at'] = time.time() + duration * 3600
     save_json(STATE / 'session.json', session)
     return describe(session)
@@ -480,7 +537,7 @@ def register_demo_project():
         raise RuntimeError('Could not register the synthetic demo project: ' + message.strip())
 
 
-def prepare(worktree, owner, config, skip_native=False, duration=RESERVATION_HOURS):
+def prepare(worktree, owner, config, duration=RESERVATION_HOURS):
     validate_worktree(worktree, config)
     claim(worktree, owner, duration)
     stop_metro()
@@ -507,20 +564,51 @@ StandardError=inherit
 ''')
     systemctl('daemon-reload')
     systemctl('restart', f'{SERVICE}-metro.service')
-    if not skip_native:
-        run(*NATIVE_BUILD_LIMITS, executable('vp'), 'run', 'mobile:install', 'android', config['serial'], cwd=worktree,
-            env=native_build_env(), stdout=sys.stderr)
+    run(*NATIVE_BUILD_LIMITS, executable('vp'), 'run', 'mobile:install', 'android', config['serial'], cwd=worktree,
+        env=native_build_env(config['adb']), stdout=sys.stderr)
     return {'owner': owner, 'worktree': str(worktree), 'metro': f'http://127.0.0.1:{config["metro_port"]}',
             'backend': f'http://127.0.0.1:{config["backend_port"]}', 'next': 'Use device_open and launch with its returned AgentDevice command. Run pair if this backend is not saved on the phone.'}
 
 
-def auth_import(path):
+def read_auth(path):
     auth = json.loads(path.read_text())
     if not auth.get('tokens') or auth.get('OPENAI_API_KEY'):
         raise RuntimeError('Expected a ChatGPT Codex login with tokens and no API key.')
     selected = {key: auth[key] for key in ['auth_mode', 'last_refresh', 'tokens'] if key in auth}
-    run('podman', 'exec', '-i', CONTAINER, 'sh', '-c', 'umask 077; mkdir -p "$CODEX_HOME"; cat > "$CODEX_HOME/auth.json"', input=json.dumps(selected), capture=True)
+    return json.dumps(selected)
+
+
+def auth_import(path):
+    selected = read_auth(path)
+    run('podman', 'exec', '-i', CONTAINER, 'sh', '-c', 'umask 077; mkdir -p "$CODEX_HOME"; cat > "$CODEX_HOME/auth.json"', input=selected, capture=True)
     return {'imported': 'Codex ChatGPT authentication only', 'destination': 'isolated container home volume'}
+
+
+def setup(config, auth_file=None):
+    check_owner(None)
+    worktree = expand(config['checkout'])
+    validate_build(worktree, config)
+    for name in ['podman', 'systemctl', 'git', 'python3', 'node', 'vp']:
+        executable(name)
+    adb_executable(sandbox_device(config)[0]['adb'] if config.get('device') else config['adb'])
+    if auth_file is not None:
+        read_auth(auth_file)
+    save_json(CONFIG, config)
+    build(worktree, config)
+    install(config)
+    systemctl('stop', f'{SERVICE}-backend.service')
+    register_demo_project()
+    systemctl('start', f'{SERVICE}-backend.service')
+    if auth_file is not None:
+        auth_import(auth_file)
+    else:
+        auth = subprocess.run(['podman', 'exec', CONTAINER, 'sh', '-c', 'test -s "$CODEX_HOME/auth.json"'], capture_output=True)
+        if auth.returncode:
+            raise LabError('Sandbox services are installed, but no Codex login is imported.',
+                           't3-android-lab sandbox setup --auth-file ~/.codex/auth.json')
+    run(sys.executable, ROOT / 'lib/verify.py', stdout=sys.stderr)
+    return {'setup': True, 'device': config.get('device'), 'authentication': 'imported' if auth_file else 'preserved',
+            'verified': True, 'next': 't3-android-lab sandbox prepare <worktree> --owner <thread-id>'}
 
 
 def pair(command, config, owner):
@@ -591,8 +679,12 @@ def keep_alive(config):
 
 
 def status(config):
+    serial = config.get('serial')
+    if config.get('device'):
+        _, device = sandbox_device(config)
+        serial = f'{device["host"]}:{device["port"]}' if device['port'] else None
     return {'repository': str(ROOT), 'session': describe(reservation()),
-            'serial': config['serial'], 'backend_port': config['backend_port'], 'metro_port': config['metro_port'],
+            'device': config.get('device'), 'serial': serial, 'backend_port': config['backend_port'], 'metro_port': config['metro_port'],
             'container': run('podman', 'ps', '-a', '--filter', f'name=^{CONTAINER}$', '--format', '{{.State}}', capture=True) or 'absent',
             'services': {name: subprocess.run(['systemctl', '--user', 'is-active', f'{SERVICE}-{name}.service'],capture_output=True,text=True).stdout.strip() for name in ['backend','bridge','metro']}}
 
@@ -601,8 +693,8 @@ def make_parser():
     parser = Parser(prog='t3-android-lab', description='Remote Android debugging and an optional isolated T3 Code sandbox.',
                     examples=('t3-android-lab device list', 't3-android-lab device connect lab-phone',
                               't3-android-lab device connect tablet --port 36000',
-                              't3-android-lab status', 't3-android-lab prepare . --owner <thread-id>',
-                              't3-android-lab release --owner <thread-id>'),
+                              't3-android-lab sandbox status', 't3-android-lab sandbox prepare . --owner <thread-id>',
+                              't3-android-lab sandbox release --owner <thread-id>'),
                     epilog='Output:\n  Text on a terminal; one JSON object when piped or with --json.\n'
                            '  Agents and scripts that parse output should always pass --json.\n'
                            '  The last --json or --text flag wins, at any command level.\n'
@@ -612,120 +704,133 @@ def make_parser():
     sub = parser.add_subparsers(dest='action', required=True, metavar='<command>', title='commands')
     import devices
     devices.parser(sub)
-    command(sub, 'status', 'Show the sandbox reservation, configured phone, container, and services.',
-            't3-android-lab status', 't3-android-lab status --json')
-    command(sub, 'connect', 'Restore sandbox ADB forwards; scan if the saved connection port fails.',
-            't3-android-lab connect', 't3-android-lab connect --json')
-    p = command(sub, 'prepare', 'Reserve the phone and prepare a T3 worktree for testing.',
-                't3-android-lab prepare . --owner <thread-id>',
-                't3-android-lab prepare ~/git/t3code-wt --owner <thread-id> --hours 3 --skip-native')
-    p.add_argument('worktree', nargs='?', default=Path.cwd(), type=expand, metavar='<worktree>', help='T3 Code worktree; default: current directory.')
-    p.add_argument('--owner', required=True, metavar='<thread-id>', help='Stable reservation owner, usually your T3 thread ID.')
-    p.add_argument('--hours', type=hours, default=RESERVATION_HOURS, help=f'Reservation length; default: {RESERVATION_HOURS} hours, maximum: {MAX_RESERVATION_HOURS}. Renew with extend.')
-    p.add_argument('--skip-native', action='store_true', help='Keep the installed native client. Use only when its native fingerprint matches this worktree.')
-    command(sub, 'wait-ready', 'Wait up to one minute for Metro to be ready.',
-            't3-android-lab wait-ready', 't3-android-lab wait-ready --json')
-    p = command(sub, 'pair', 'Open a sandbox pairing route using the bound AgentDevice command. For ADB pairing, use device pair.',
-                't3-android-lab pair --owner <thread-id> --agent-device <returned-command>',
-                't3-android-lab pair --owner <thread-id> --agent-device <returned-command> --json')
-    p.add_argument('--agent-device', required=True, type=expand, metavar='<returned-command>', help='Exact bound executable returned by device_open.')
-    p.add_argument('--owner', required=True, metavar='<thread-id>', help='Current reservation owner.')
-    p = command(sub, 'extend', 'Extend this owner reservation from now.',
-                't3-android-lab extend --owner <thread-id> --hours 2',
-                't3-android-lab extend --owner <thread-id> --hours 4')
-    p.add_argument('--owner', required=True, metavar='<thread-id>', help='Current reservation owner.')
-    p.add_argument('--hours', type=hours, default=RESERVATION_HOURS, help=f'Hours from now; default: {RESERVATION_HOURS}, maximum: {MAX_RESERVATION_HOURS}.')
-    p = command(sub, 'release', 'Release this owner reservation and stop its Metro.',
-                't3-android-lab release --owner <thread-id>', 't3-android-lab release --owner <thread-id> --json')
-    p.add_argument('--owner', required=True, metavar='<thread-id>', help='Current reservation owner.')
-    command(sub, 'free', 'Watch check: print JSON only when unreserved; otherwise print nothing. Use status for a summary.',
-            't3-android-lab free', 't3-android-lab free --json')
-    p = command(sub, 'wake', "Send a Wake-on-LAN packet from the sandbox phone onto its Wi-Fi network.",
-                't3-android-lab wake aa:bb:cc:dd:ee:ff', 't3-android-lab wake aa:bb:cc:dd:ee:ff --json')
-    p.add_argument('mac', metavar='<mac>', help='MAC address of the computer to wake.')
-    p = command(sub, 'build', 'Build a sanitized backend image from a T3 worktree.',
-                't3-android-lab build .', 't3-android-lab build ~/git/t3code-wt --owner <thread-id>')
-    p.add_argument('worktree', nargs='?', default=Path.cwd(), type=expand, metavar='<worktree>', help='T3 Code worktree; default: current directory.')
-    p.add_argument('--owner', metavar='<thread-id>', help='Required when this thread owns an active reservation.')
-    p = command(sub, 'stop', 'Stop lab services and the reservation timer; preserve data and credentials.',
-                't3-android-lab stop', 't3-android-lab stop --owner <thread-id>')
-    p.add_argument('--owner', metavar='<thread-id>', help='Required when this thread owns an active reservation.')
-    p = command(sub, 'configure', 'Save sandbox configuration. Device-only commands need no sandbox configuration.',
-                't3-android-lab configure --checkout ~/git/t3code --serial 100.x.x.x:35000',
-                't3-android-lab configure --checkout ~/git/t3code --serial 100.x.x.x:35000 --metro-port 8082')
-    p.add_argument('--checkout', required=True, type=expand, metavar='<worktree>', help='T3 Code source checkout.')
-    p.add_argument('--serial', required=True, metavar='<host:connection-port>', help='Sandbox phone wireless ADB address; not the pairing port.')
-    p.add_argument('--adb', metavar='<path>', help='ADB executable; default: saved device inventory path, then PATH or an Android SDK.')
-    p.add_argument('--codex-binary', default=shutil.which('codex') or str(Path.home() / '.local/bin/codex'), type=expand, metavar='<path>', help='Standalone Linux Codex ELF executable; default: codex on PATH, then ~/.local/bin/codex.')
-    p.add_argument('--backend-port', type=int, default=13775, help='Host backend port; default: 13775.')
-    p.add_argument('--metro-port', type=int, default=8081, help='Metro port; default: 8081.')
-    command(sub, 'install', 'Install sandbox user services and the reservation reconnect timer.',
-            't3-android-lab install', 't3-android-lab install --json')
     p = command(sub, 'skill-install', 'Install the skill once in a global user skill directory.',
                 't3-android-lab skill-install', 't3-android-lab skill-install --directory ~/.codex/skills')
     p.add_argument('--directory', type=expand, default=Path.home() / '.agents/skills', metavar='<path>', help='User skill directory; default: ~/.agents/skills.')
+    for name, help_text in [('free', 'Compatibility watch check. Prefer sandbox free.'),
+                            ('keep-alive', 'Compatibility timer entry point. Prefer sandbox keep-alive.')]:
+        command(sub, name, help_text, f't3-android-lab {name}', f't3-android-lab {name} --json')
+    sandbox = command(sub, 'sandbox', 'Set up and operate the isolated T3 Code development sandbox.',
+                      't3-android-lab sandbox setup --checkout ~/git/t3code --device lab-phone --auth-file ~/.codex/auth.json',
+                      't3-android-lab sandbox prepare . --owner <thread-id>')
+    sub = sandbox.add_subparsers(dest='sandbox_action', required=True, metavar='<command>', title='sandbox commands')
+    command(sub, 'status', 'Show the sandbox reservation, configured phone, container, and services.',
+            't3-android-lab sandbox status', 't3-android-lab sandbox status --json')
+    command(sub, 'connect', 'Restore sandbox ADB forwards; scan if the saved connection port fails.',
+            't3-android-lab sandbox connect', 't3-android-lab sandbox connect --json')
+    p = command(sub, 'prepare', 'Reserve the phone and prepare a T3 worktree for testing.',
+                't3-android-lab sandbox prepare . --owner <thread-id>',
+                't3-android-lab sandbox prepare ~/git/t3code-wt --owner <thread-id> --hours 3')
+    p.add_argument('worktree', nargs='?', default=Path.cwd(), type=expand, metavar='<worktree>', help='T3 Code worktree; default: current directory.')
+    p.add_argument('--owner', required=True, metavar='<thread-id>', help='Stable reservation owner, usually your T3 thread ID.')
+    p.add_argument('--hours', type=hours, default=RESERVATION_HOURS, help=f'Reservation length; default: {RESERVATION_HOURS} hours, maximum: {MAX_RESERVATION_HOURS}. Renew with extend.')
+    command(sub, 'wait-ready', 'Wait up to one minute for Metro to be ready.',
+            't3-android-lab sandbox wait-ready', 't3-android-lab sandbox wait-ready --json')
+    p = command(sub, 'pair', 'Open a sandbox pairing route using the bound AgentDevice command. For ADB pairing, use device pair.',
+                't3-android-lab sandbox pair --owner <thread-id> --agent-device <returned-command>',
+                't3-android-lab sandbox pair --owner <thread-id> --agent-device <returned-command> --json')
+    p.add_argument('--agent-device', required=True, type=expand, metavar='<returned-command>', help='Exact bound executable returned by device_open.')
+    p.add_argument('--owner', required=True, metavar='<thread-id>', help='Current reservation owner.')
+    p = command(sub, 'extend', 'Extend this owner reservation from now.',
+                't3-android-lab sandbox extend --owner <thread-id> --hours 2',
+                't3-android-lab sandbox extend --owner <thread-id> --hours 4')
+    p.add_argument('--owner', required=True, metavar='<thread-id>', help='Current reservation owner.')
+    p.add_argument('--hours', type=hours, default=RESERVATION_HOURS, help=f'Hours from now; default: {RESERVATION_HOURS}, maximum: {MAX_RESERVATION_HOURS}.')
+    p = command(sub, 'release', 'Release this owner reservation and stop its Metro.',
+                't3-android-lab sandbox release --owner <thread-id>', 't3-android-lab sandbox release --owner <thread-id> --json')
+    p.add_argument('--owner', required=True, metavar='<thread-id>', help='Current reservation owner.')
+    command(sub, 'free', 'Watch check: print JSON only when unreserved; otherwise print nothing. Use status for a summary.',
+            't3-android-lab sandbox free', 't3-android-lab sandbox free --json')
+    p = command(sub, 'wake', "Send a Wake-on-LAN packet from the sandbox phone onto its Wi-Fi network.",
+                't3-android-lab sandbox wake aa:bb:cc:dd:ee:ff', 't3-android-lab sandbox wake aa:bb:cc:dd:ee:ff --json')
+    p.add_argument('mac', metavar='<mac>', help='MAC address of the computer to wake.')
+    p = command(sub, 'build', 'Build a sanitized backend image from a T3 worktree.',
+                't3-android-lab sandbox build .', 't3-android-lab sandbox build ~/git/t3code-wt --owner <thread-id>')
+    p.add_argument('worktree', nargs='?', default=Path.cwd(), type=expand, metavar='<worktree>', help='T3 Code worktree; default: current directory.')
+    p.add_argument('--owner', metavar='<thread-id>', help='Required when this thread owns an active reservation.')
+    p = command(sub, 'stop', 'Stop lab services and the reservation timer; preserve data and credentials.',
+                't3-android-lab sandbox stop', 't3-android-lab sandbox stop --owner <thread-id>')
+    p.add_argument('--owner', metavar='<thread-id>', help='Required when this thread owns an active reservation.')
+    for name, help_text in [('configure', 'Save sandbox settings without starting services.'),
+                            ('setup', 'Configure, build, start, and verify the sandbox. Retry using saved settings.')]:
+        p = command(sub, name, help_text,
+                    f't3-android-lab sandbox {name} --checkout ~/git/t3code --device lab-phone',
+                    f't3-android-lab sandbox {name}' + (' --auth-file ~/.codex/auth.json' if name == 'setup' else ' --metro-port 8082'))
+        p.add_argument('--checkout', type=expand, metavar='<worktree>', help='T3 Code source checkout; required on first setup.')
+        selection = p.add_mutually_exclusive_group()
+        selection.add_argument('--device', metavar='<name>', help='Registered device name; uses its current saved host, port, and ADB path.')
+        selection.add_argument('--serial', metavar='<host:connection-port>', help='Legacy direct ADB address. Prefer --device for registered devices.')
+        p.add_argument('--adb', metavar='<path>', help='ADB executable for a legacy --serial configuration. Named devices use device adb.')
+        p.add_argument('--codex-binary', type=expand, metavar='<path>', help='Standalone Linux Codex ELF executable; default: codex on PATH, then ~/.local/bin/codex.')
+        p.add_argument('--backend-port', type=int, help='Host backend port; default: saved setting, then 13775.')
+        p.add_argument('--metro-port', type=int, help='Metro port; default: saved setting, then 8081.')
+        if name == 'setup':
+            p.add_argument('--auth-file', type=expand, metavar='<path>', help='Import this Codex login explicitly. Omit to preserve existing sandbox authentication.')
+    command(sub, 'install', 'Install sandbox user services and the reservation reconnect timer.',
+            't3-android-lab sandbox install', 't3-android-lab sandbox install --json')
     p = command(sub, 'auth-import', 'Copy only a ChatGPT Codex login into the sandbox.',
-                't3-android-lab auth-import ~/.codex/auth.json', 't3-android-lab auth-import <path> --json')
+                't3-android-lab sandbox auth-import ~/.codex/auth.json', 't3-android-lab sandbox auth-import <path> --json')
     p.add_argument('file', type=expand, metavar='<path>', help='Existing Codex ChatGPT login file; never prints credentials.')
     command(sub, 'verify', 'Check actual sandbox isolation without inference. Always prints PASS lines, including with --json.',
-            't3-android-lab verify', 't3-android-lab verify --text')
+            't3-android-lab sandbox verify', 't3-android-lab sandbox verify --text')
     command(sub, 'keep-alive', 'Reconnect a reserved phone on its saved port without scanning (timer). Always prints JSON.',
-            't3-android-lab keep-alive', 't3-android-lab keep-alive --json')
+            't3-android-lab sandbox keep-alive', 't3-android-lab sandbox keep-alive --json')
     return parser
 
 
 def main():
     args = make_parser().parse_args()
     import devices
+    if args.action in {'free', 'keep-alive'}:
+        args.sandbox_action, args.action = args.action, 'sandbox'
+    action = args.sandbox_action if args.action == 'sandbox' else args.action
     def emit(value):
         output(value, args)
     try:
-        if args.action == 'configure':
-            git_common(args.checkout)
-            if not re.fullmatch(r'[A-Za-z0-9.\-]+:[0-9]{1,5}', args.serial):
-                raise RuntimeError('Expected a host:port wireless ADB serial.')
-            if not all(1024 <= port <= 65535 for port in [args.backend_port,args.metro_port]) or args.backend_port == args.metro_port:
-                raise RuntimeError('Metro and backend ports must be distinct and between 1024 and 65535.')
-            values = {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items() if key not in {'action', 'output_format'}}
-            values['adb'] = adb_executable(args.adb or devices.load()['adb'])
-            save_json(CONFIG, values)
-            emit({'configured': str(CONFIG)})
-            return
-        if args.action == 'skill-install':
+        if action == 'skill-install':
             emit(skill_install(args.directory)); return
-        if args.action == 'device':
+        if action == 'device':
             if args.device_action in {'list', 'pair'}:
                 emit(devices.dispatch(args))
             else:
                 with operation():
                     emit(devices.dispatch(args))
             return
+        if action in {'configure', 'setup'}:
+            with operation():
+                check_owner(None)
+                config = sandbox_configuration(args)
+                if action == 'setup':
+                    emit(setup(config, args.auth_file))
+                else:
+                    save_json(CONFIG, config)
+                    emit({'configured': str(CONFIG), 'device': config.get('device')})
+            return
         config = load_config()
-        if args.action == 'verify':
+        if action == 'verify':
             run(sys.executable, ROOT / 'lib/verify.py'); return
-        if args.action == 'connect':
-            emit(connect(config)); return
-        if args.action == 'keep-alive':
-            emit(keep_alive(config)); return
-        if args.action == 'status':
+        if action == 'status':
             emit(status(config)); return
-        if args.action == 'free':
+        if action == 'free':
             if line := free(): print(line)
             return
-        if args.action == 'wake':
-            emit(wake(config, args.mac)); return
-        if args.action == 'extend':
-            emit(extend(args.owner, args.hours)); return
-        if args.action == 'wait-ready':
+        if action == 'wait-ready':
             emit(wait_ready(config)); return
         with operation():
-            if args.action == 'install': result = install(config)
-            elif args.action == 'build': result = build(args.worktree, config, args.owner)
-            elif args.action == 'prepare': result = prepare(args.worktree, args.owner, config, args.skip_native, args.hours)
-            elif args.action == 'stop': result = stop(args.owner)
-            elif args.action == 'auth-import': result = auth_import(args.file)
-            elif args.action == 'pair': result = pair(args.agent_device, config, args.owner)
-            elif args.action == 'release':
+            config = load_config()
+            if action == 'connect': result = connect(config)
+            elif action == 'keep-alive': result = keep_alive(config)
+            elif action == 'wake': result = wake(config, args.mac)
+            elif action == 'extend': result = extend(args.owner, args.hours)
+            elif action == 'install':
+                check_owner(None)
+                result = install(config)
+            elif action == 'build': result = build(args.worktree, config, args.owner)
+            elif action == 'prepare': result = prepare(args.worktree, args.owner, config, args.hours)
+            elif action == 'stop': result = stop(args.owner)
+            elif action == 'auth-import': result = auth_import(args.file)
+            elif action == 'pair': result = pair(args.agent_device, config, args.owner)
+            elif action == 'release':
                 session = STATE / 'session.json'
                 if not session.exists(): result = {'released': True, 'already_released': True}
                 else:

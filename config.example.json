@@ -1,7 +1,6 @@
 {
   "checkout": "~/git/t3code",
-  "adb": "~/android-sdk/platform-tools/adb",
-  "serial": "100.x.x.x:38797",
+  "device": "lab-phone",
   "codex_binary": "~/.local/bin/codex",
   "backend_port": 13775,
   "metro_port": 8081

@@ -86,7 +86,7 @@ KeepADB recovery depends on Android version, Wi-Fi approval, permissions, and th
 
 Follow [Set up a machine](guide.md#set-up-a-machine) for the isolated backend. General debugging ends after device verification; it does not import a Codex login or start a dev server.
 
-The sandbox currently selects one device through `config.local.json`. Configure its `serial` with the selected device's Tailscale address and connection port, then reserve a worktree with `prepare`. Use the global lab skill for reservation, Metro, installation, synthetic data, and cleanup. Extra devices remain available through the independent inventory.
+The sandbox selects one registered device by name in `config.local.json`. Run `sandbox setup --device <name>` with the checkout and login options from the guide, then reserve a worktree with `sandbox prepare`. Its ADB address stays in the device inventory. Use the global lab skill for reservation, Metro, installation, synthetic data, and cleanup. Extra devices remain available through the independent inventory.
 
 ## Sources
 

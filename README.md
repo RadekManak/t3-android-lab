@@ -6,11 +6,11 @@ Give your T3 Code coding agent access to real Android phones and tablets. This a
 
 ## How it works
 
-The agent runs the lab's Python CLI on a Linux device host. Tailscale provides a private network between that host and the Android device. Paired wireless Android Debug Bridge (ADB) provides debugging access, and the CLI discovers changed connection ports.
+The agent runs the lab's Python CLI on a Linux device host. Tailscale provides a private network between that host and the Android device. Paired wireless Android Debug Bridge (ADB) provides debugging access, and `device connect <name>` discovers changed connection ports.
 
 T3 Code's Device tools handle app interaction and screenshots. ADB handles logs, installs, and port forwarding. You handle the initial Android settings and authentication until remote access is available.
 
-For T3 Code development, the optional sandbox reserves a shared phone for one worktree and runs an isolated backend with synthetic projects. The backend and app development server run on the Linux host. The Android app connects to them through ADB forwarding.
+For T3 Code development, the optional sandbox selects a registered device by name, reserves it for one worktree, and runs an isolated backend with synthetic projects. `sandbox setup` builds, starts, and verifies that environment. `sandbox prepare` switches worktrees and automatically checks whether the native client needs updating. The backend and app development server run on the Linux host. The Android app connects to them through ADB forwarding.
 
 ## System requirements
 
@@ -41,7 +41,9 @@ cd t3-android-lab
 bin/t3-android-lab skill-install
 ```
 
-Ask your T3 Code agent to use the `t3-android-lab` skill to onboard a device. The skill links to this checkout, so keep it in place. Use `--directory ~/.codex/skills` if that is where your agent reads skills.
+This installs the lab instructions as a global user skill by linking `~/.agents/skills/t3-android-lab` to this checkout. Keep the checkout in place. Ask your T3 Code agent to use the `t3-android-lab` skill to onboard a device. Use `--directory ~/.codex/skills` if that is where your agent reads skills.
+
+Use `device …` for pairing and debugging access, and `sandbox …` for the optional development environment. Each command has `--help` with examples.
 
 - [Device onboarding](docs/onboarding.md): host prerequisites, secure pairing, and optional managed-device recovery.
 - [Setup and operations guide](docs/guide.md): CLI use, sandbox setup, worktree testing, shutdown, and maintenance.

@@ -47,13 +47,15 @@ def render(key, value):
     if key == 'status':
         session = value['session']
         reservation = f'{session["owner"]} for {session["worktree"]}, {expiry(session)}' if session else 'none (phone is free)'
+        phone = (f'{value["device"]} at {value["serial"] or "port not saved"} (from devices.local.json; not probed)'
+                 if value.get('device') else f'{value["serial"]} (from config.local.json; not probed)')
         lines = [f'Reservation: {reservation}',
-                 f'Sandbox phone: {value["serial"]} (from config.local.json; not probed)',
+                 f'Sandbox phone: {phone}',
                  f'Ports: Metro {value["metro_port"]}, backend {value["backend_port"]}',
                  f'Container: {value["container"]}',
                  'Services: ' + ', '.join(f'{name} {state}' for name, state in value['services'].items())]
         if not session:
-            lines.append('Next: t3-android-lab prepare <worktree> --owner <thread-id>')
+            lines.append('Next: t3-android-lab sandbox prepare <worktree> --owner <thread-id>')
         return '\n'.join(lines)
     if key == 'device add':
         return (f'Registered {value["added"]} ({value["mode"]}) at {value["host"]}; not contacted.\n'
@@ -66,7 +68,7 @@ def render(key, value):
     if key == 'connect':
         return f'Connected sandbox phone at {value["connected"]}.\nReverse ports: ' + ', '.join(map(str, value['reverse_ports']))
     if key == 'device pair':
-        return f'Paired {value["paired"]}.\nNext: t3-android-lab device connect {value["paired"]} --port <connection-port>'
+        return f'Paired {value["paired"]}.\nNext: t3-android-lab device connect {value["paired"]}'
     if key == 'device disconnect':
         return f'Disconnected {value["disconnected"]} from this ADB host.'
     if key == 'release':

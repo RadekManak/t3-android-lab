@@ -31,7 +31,9 @@ class CliTests(unittest.TestCase):
         closed_server = socket.socket()
         closed_server.bind(('127.0.0.1', 0))
         self.addCleanup(closed_server.close)
-        self.environment = {**os.environ, 'ADB_SERVER_SOCKET': f'tcp:127.0.0.1:{closed_server.getsockname()[1]}'}
+        (self.root / 'home').mkdir()
+        self.environment = {**os.environ, 'HOME': str(self.root / 'home'),
+                            'ADB_SERVER_SOCKET': f'tcp:127.0.0.1:{closed_server.getsockname()[1]}'}
         adb = self.root / 'bin/adb'
         adb.write_text('#!' + sys.executable + '\nfrom pathlib import Path\n'
                        f'Path({str(self.root / "adb-invoked")!r}).touch()\nraise SystemExit(1)\n')
@@ -105,7 +107,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result['devices']['tablet']['mode'], 'on-demand')
 
     def test_usage_and_runtime_errors_are_actionable_without_stdout(self):
-        for args in [('device', 'connect'), ('prepare',)]:
+        for args in [('device', 'connect'), ('sandbox', 'prepare')]:
             result = self.cli(*args)
             self.assertEqual(result.returncode, 2)
             self.assertEqual(result.stdout, '')
@@ -114,7 +116,7 @@ class CliTests(unittest.TestCase):
         self.register()
         for args, message, hint in [
             (('device', 'connect', 'missing'), 'Unknown device', 't3-android-lab device list'),
-            (('status',), 'Sandbox is not configured', 't3-android-lab configure --checkout')]:
+            (('sandbox', 'status'), 'Sandbox is not configured', 't3-android-lab sandbox setup --checkout')]:
             result = self.cli(*args)
             self.assertEqual(result.returncode, 1)
             self.assertEqual(result.stdout, '')
@@ -138,11 +140,79 @@ class CliTests(unittest.TestCase):
         checkout.mkdir()
         (checkout / 'package.json').write_text('{"name": "@t3tools/monorepo"}')
         subprocess.run(['git', 'init', '-q', str(checkout)], check=True)
-        result = self.cli('configure', '--checkout', str(checkout), '--serial', '100.64.0.1:35000', '--json')
+        result = self.cli('sandbox', 'configure', '--checkout', str(checkout), '--serial', '100.64.0.1:35000', '--json')
         self.assertEqual(result.returncode, 0, result.stderr)
         config = json.loads((self.root / 'config.local.json').read_text())
         self.assertNotIn('output_format', config)
         self.assertEqual(config['serial'], '100.64.0.1:35000')
+
+    def test_named_configuration_and_grouped_format_flags_do_not_contact_devices(self):
+        self.register()
+        checkout = self.root / 'checkout'
+        checkout.mkdir()
+        (checkout / 'package.json').write_text('{"name": "@t3tools/monorepo"}')
+        subprocess.run(['git', 'init', '-q', str(checkout)], check=True)
+        result = self.cli('--text', 'sandbox', '--text', 'configure', '--checkout', str(checkout),
+                          '--device', 'tablet', '--json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['device'], 'tablet')
+        config = json.loads((self.root / 'config.local.json').read_text())
+        for key in ['serial', 'adb', 'output_format', 'action', 'sandbox_action']:
+            self.assertNotIn(key, config)
+        result = self.cli('sandbox', 'configure', '--metro-port', '8082', '--json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.root / 'config.local.json').read_text())['metro_port'], 8082)
+        invalid = self.cli('sandbox', 'configure', '--device', 'missing')
+        self.assertEqual(invalid.returncode, 1)
+        self.assertIn('Unknown device', invalid.stderr)
+        self.assertFalse((self.root / 'adb-invoked').exists())
+
+    def test_setup_cli_with_fake_host_tools_preserves_authentication_on_retry(self):
+        self.register()
+        checkout = self.root / 'checkout'
+        checkout.mkdir()
+        (checkout / 'package.json').write_text('{"name": "@t3tools/monorepo", "engines": {"node": "24.0.0"}}')
+        subprocess.run(['git', 'init', '-q', str(checkout)], check=True)
+        (checkout / 'apps/server/node_modules/effect').mkdir(parents=True)
+        (checkout / 'apps/server/package.json').write_text('{"dependencies": {}}')
+        codex = self.root / 'codex'
+        codex.write_bytes(b'\x7fELFfixture')
+        shutil.copytree(lab.ROOT / 'container', self.root / 'container')
+        (self.root / 'lib/verify.py').write_text('print("PASS fixture isolation verifier")\n')
+        fixture_auth = self.root / 'sandbox-auth.json'
+        scripts = {
+            'node': 'import sys\nif "--input-type=module" in sys.argv: print("{}")\n',
+            'vp': '',
+            'systemctl': '',
+            'podman': 'import sys\nfrom pathlib import Path\n'
+                      f'auth = Path({str(fixture_auth)!r})\n'
+                      'if "-i" in sys.argv: auth.write_text(sys.stdin.read())\n'
+                      'if any(arg.startswith("test -s") for arg in sys.argv):\n'
+                      '    raise SystemExit(0 if auth.exists() else 1)\n',
+        }
+        for name, script in scripts.items():
+            tool = self.root / 'bin' / name
+            tool.write_text('#!' + sys.executable + '\n' + script)
+            tool.chmod(0o700)
+        auth = self.root / 'host-auth.json'
+        auth.write_text('{"tokens": {"access_token": "fixture"}, "history": "excluded"}')
+        result = self.cli('sandbox', 'setup', '--checkout', str(checkout), '--device', 'tablet',
+                          '--codex-binary', str(codex), '--auth-file', str(auth), '--json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['authentication'], 'imported')
+        self.assertIn('PASS fixture isolation verifier', result.stderr)
+        fixture_auth.write_text('{"tokens": {"access_token": "refreshed"}}')
+        result = self.cli('sandbox', 'setup', '--json')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['authentication'], 'preserved')
+        self.assertEqual(json.loads(fixture_auth.read_text())['tokens']['access_token'], 'refreshed')
+        self.assertFalse((self.root / 'adb-invoked').exists())
+        self.assertNotIn('auth', (self.root / 'config.local.json').read_text())
+
+    def test_removed_native_skip_flag_is_a_usage_error(self):
+        result = self.cli('sandbox', 'prepare', '.', '--owner', 'thread-a', '--skip-native')
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, '')
 
     def test_help_is_available_at_every_level_without_configuration(self):
         def visit(parser, path):
@@ -161,10 +231,12 @@ class CliTests(unittest.TestCase):
 
     def test_watch_and_timer_output_ignore_text_flags(self):
         (self.root / 'config.local.json').write_text('{}')
-        for args in [('free',), ('free', '--text'), ('--text', 'free')]:
+        for args in [('free',), ('free', '--text'), ('--text', 'free'),
+                     ('sandbox', 'free'), ('sandbox', 'free', '--text')]:
             self.assertEqual(self.cli(*args).stdout, '{"free": true}\n')
         self.assertEqual(self.tty('free', '--text'), '{"free": true}\n')
-        for args in [('keep-alive', '--text'), ('device', 'keep-alive', '--text')]:
+        for args in [('keep-alive', '--text'), ('device', 'keep-alive', '--text'),
+                     ('sandbox', 'keep-alive', '--text')]:
             result = self.cli(*args)
             self.assertEqual(result.returncode, 0, result.stderr)
             json.loads(result.stdout)
@@ -225,7 +297,7 @@ class PresentationTests(unittest.TestCase):
 
     def test_native_install_logs_go_to_stderr(self):
         with tempfile.TemporaryDirectory() as temporary:
-            config = {'serial': '100.64.0.1:35000', 'metro_port': 8081, 'backend_port': 13775}
+            config = {'serial': '100.64.0.1:35000', 'adb': '/fixture/sdk/adb', 'metro_port': 8081, 'backend_port': 13775}
             with patch.object(Path, 'home', return_value=Path(temporary)), \
                  patch.multiple(lab, validate_worktree=lambda *a: None, claim=lambda *a: None,
                                 stop_metro=lambda: None, build=lambda *a: None, systemctl=lambda *a: None,
@@ -236,6 +308,7 @@ class PresentationTests(unittest.TestCase):
             self.assertEqual(result['owner'], 'thread-a')
             self.assertIn('mobile:install', run.call_args.args)
             self.assertIs(run.call_args.kwargs['stdout'], sys.stderr)
+            self.assertTrue(run.call_args.kwargs['env']['PATH'].startswith('/fixture/sdk' + os.pathsep))
 
 
 if __name__ == '__main__':
