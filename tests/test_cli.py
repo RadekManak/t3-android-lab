@@ -244,6 +244,26 @@ class CliTests(unittest.TestCase):
         (self.root / '.state/session.json').write_text(json.dumps(session))
         self.assertEqual(self.cli('free', '--text').stdout, '')
 
+    def test_busy_timers_skip_successfully_and_retry_after_the_lock_is_released(self):
+        self.register()
+        (self.root / 'config.local.json').write_text('{}')
+        inventory = (self.root / 'devices.local.json').read_bytes()
+        commands = [('keep-alive',), ('sandbox', 'keep-alive'), ('device', 'keep-alive')]
+        with (self.root / '.state/operation.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for args in commands:
+                with self.subTest(args=args):
+                    result = self.cli(*args, '--text')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads(result.stdout), {'skipped': 'operation-in-progress'})
+                    self.assertEqual(result.stderr, '')
+        self.assertEqual((self.root / 'devices.local.json').read_bytes(), inventory)
+        self.assertFalse((self.root / 'adb-invoked').exists())
+        for args in commands:
+            result = self.cli(*args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn('skipped', json.loads(result.stdout))
+
     def test_inventory_can_be_read_under_lock_but_mutations_cannot(self):
         self.register()
         with (self.root / '.state/operation.lock').open('a') as lock:

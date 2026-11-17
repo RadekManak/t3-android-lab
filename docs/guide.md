@@ -57,6 +57,8 @@ bin/t3-android-lab sandbox status --json
 
 Errors go to stderr, with retry commands where available. Exit codes are 0 for success, 1 for an operation failure, and 2 for invalid arguments. Watcher `sandbox free` and timer commands retain JSON output regardless of format flags. `sandbox verify` always prints `PASS` lines. The old root `free` and `keep-alive` entry points remain available for existing watches and installed timers.
 
+When another lab operation holds the shared lock, timer commands exit successfully with `{"skipped": "operation-in-progress"}`. The next timer run retries. Interactive mutations still fail with retry guidance while the lock is held.
+
 ## Set up a machine
 
 Complete [device onboarding](onboarding.md) and check the [sandbox requirements](../README.md#system-requirements). Install the T3 Code checkout's dependencies before building.

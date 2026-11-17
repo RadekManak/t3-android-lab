@@ -54,6 +54,10 @@ class LabError(RuntimeError):
         self.exit_code = exit_code
 
 
+class OperationBusy(LabError):
+    pass
+
+
 class Parser(argparse.ArgumentParser):
     def __init__(self, *args, examples=(), **kwargs):
         self.examples = examples
@@ -158,7 +162,7 @@ def operation():
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise LabError('Another lab operation is running. Retry after it completes.', 't3-android-lab sandbox status')
+            raise OperationBusy('Another lab operation is running. Retry after it completes.', 't3-android-lab sandbox status')
         yield
 
 
@@ -841,6 +845,10 @@ def main():
                     result = {'released': True, 'owner': args.owner}
             emit(result)
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
+        if isinstance(error, OperationBusy) and (action == 'keep-alive' or
+                (action == 'device' and args.device_action == 'keep-alive')):
+            emit({'skipped': 'operation-in-progress'})
+            return
         print('Error: ' + str(error), file=sys.stderr)
         if isinstance(error, LabError):
             for hint in error.hints:
