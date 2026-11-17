@@ -46,6 +46,7 @@ This installs the lab instructions as a global user skill by linking `~/.agents/
 Use `device …` for pairing and debugging access, and `sandbox …` for the optional development environment. Each command has `--help` with examples.
 
 - [Device onboarding](docs/onboarding.md): host prerequisites, secure pairing, and optional managed-device recovery.
+- [Unattended device setup](docs/unattended.md): model-specific research, recovery settings, and tests for managed devices left unattended.
 - [Setup and operations guide](docs/guide.md): CLI use, sandbox setup, worktree testing, shutdown, and maintenance.
 - [Agent skill](skills/t3-android-lab/SKILL.md): device selection and the agent's working procedure.
 - [Isolation boundary](docs/isolation.md): what the development sandbox can access.

@@ -15,7 +15,8 @@ Read `device list --json` first. It combines the saved inventory with connection
 
 Availability does not describe ownership or data sensitivity. Either mode can contain important user data. Follow the user's task scope for app installs, account access, and data changes.
 
-- For a new device, follow [Onboard an Android device](../../docs/onboarding.md). Complete host registration, secure pairing, connection, and Device panel verification. Configure device-side recovery only for managed devices.
+- For a new device, follow [Onboard an Android device](../../docs/onboarding.md). Complete host registration, secure pairing, connection, and Device panel verification.
+- For a managed device intended for unattended use, including an unattended sandbox, complete [unattended device setup](../../docs/unattended.md). Identify the actual model and OS, research its background and reboot restrictions, apply the relevant settings, and test recovery while the user can reach it. Record observed results and remaining manual dependencies locally. On-demand onboarding ends at connection and screen verification; skip unattended setup for those devices.
 - For general debugging, use `device connect <name>` and T3's Device tools. This path needs no T3 checkout, container, Metro, or Codex authentication. It sets no app port forwards. Read logs with ADB targeted to the connected serial. Close your own AgentDevice session afterward. Disconnect an on-demand device when the requested session ends unless the user wants it left connected.
 - For T3 Code development, use the sandbox workflow below. It takes precedence over `test-t3-mobile` for reservations, backend and data isolation, Metro, native installation, pairing, and cleanup. Consult that skill only for client test procedures when available.
 

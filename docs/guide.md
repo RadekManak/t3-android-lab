@@ -35,7 +35,7 @@ Use T3 Code's `device_list`, `device_open`, and the returned bound AgentDevice c
 
 Close the AgentDevice session you opened when finished. Use `device disconnect <name>` to end its ADB connection. `device remove <name>` removes local configuration without revoking Android pairing. To revoke access, forget this host on the device's Wireless debugging screen.
 
-The optional `device install` timer reconnects managed entries on saved ports. `device stop` disables that timer. Follow [managed-device recovery](onboarding.md#enable-recovery-on-a-managed-device) to configure device-side recovery.
+The optional `device install` timer reconnects managed entries on saved ports, even without a sandbox reservation. `device stop` disables that timer. The sandbox reconnect timer runs only during a reservation. For unattended managed devices, complete [device-specific recovery setup](unattended.md), including verification of the separate device timer.
 
 Device inventory is stored in `devices.local.json`. Sandbox settings are stored separately in `config.local.json`. Both are local and ignored by Git.
 

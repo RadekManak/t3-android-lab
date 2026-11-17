@@ -6,10 +6,10 @@ Add a phone or tablet for general debugging or T3 development. You can perform h
 
 Choose the availability preference:
 
-- **Managed:** a device you prefer to keep available. You can configure device-side recovery and optional host reconnection.
+- **Managed:** a device you prefer to keep available. For unattended use, complete device-specific recovery setup and verification before leaving it unattended.
 - **On-demand:** a device you connect when needed. It is excluded from automatic host reconnection.
 
-New entries default to on-demand. Both modes use the same pairing and connection commands. The mode makes no assumption about ownership or data sensitivity. Registration does not contact the device. Store device names, addresses, modes, and executable paths in the ignored `devices.local.json`.
+New entries default to on-demand. Both modes use the same pairing and connection commands. On-demand setup ends after connection and screen verification. The mode makes no assumption about ownership or data sensitivity. Registration does not contact the device. Store device names, addresses, modes, and executable paths in the ignored `devices.local.json`.
 
 ## Prepare the host and device
 
@@ -25,7 +25,7 @@ The lab searches `PATH`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `~/Android/Sdk`, an
 
 1. Install Tailscale on the Linux host and sign in to the intended tailnet. An agent uses T3's `request_secret` for credentials that only you can provide.
 2. Ask the user to connect the Android device to Wi-Fi, install Tailscale, and sign in to the same tailnet. The agent can identify its Tailscale address with `tailscale status`. If several entries could match, ask which device to use.
-3. Ask the user to enable Developer options. On Samsung, open **Settings → About phone** or **About tablet → Software information** and tap **Build number** seven times. The user enters the device unlock code locally.
+3. Identify the device model and Android version, then look up its manufacturer's instructions for enabling Developer options. Ask the user to follow the matching steps and enter any device unlock code locally. After pairing, confirm the model and OS through device diagnostics.
 4. Ask the user to enable **Developer options → Wireless debugging** and allow the current trusted Wi-Fi network. Keep Wi-Fi connected, even though the agent uses the Tailscale address.
 5. Register the device without contacting it:
 
@@ -66,21 +66,7 @@ If the saved connection port changes, `device connect <name>` discovers and save
 
 ## Enable recovery on a managed device
 
-The working Samsung lab setup uses Android's always-on VPN for Tailscale and [KeepADB](https://github.com/m00sfett/KeepADB) for Wireless debugging recovery. These are separate from host-side ADB reconnection. Apply this section only to a device whose owner selected managed availability.
-
-1. In Android's VPN settings, enable **Always-on VPN** for Tailscale. Exempt Tailscale from battery optimization. Confirm Tailscale remains connected after leaving its app.
-2. Install KeepADB from its [official F-Droid entry](https://f-droid.org/packages/de.hohnepeople.keepadb/) or upstream releases. Use the owner's chosen distribution source. Do not bundle its APK in this repository.
-3. Grant KeepADB's documented permission once through the paired ADB connection:
-
-   ```bash
-   ~/android-sdk/platform-tools/adb -s 100.x.x.x:36000 shell pm grant de.hohnepeople.keepadb android.permission.WRITE_SECURE_SETTINGS
-   ```
-
-4. Open KeepADB through the bound AgentDevice command. Enable its **Keep-Alive** option and exempt the app from battery optimization. Select the trusted Wi-Fi networks on which recovery is allowed. Confirm any Android network approval on the device. Use a finite screen timeout and keep **Stay awake while charging** disabled.
-5. Verify the current setup through the UI and host diagnostics. `settings get secure always_on_vpn_app` reports `com.tailscale.ipn`; `settings get global adb_wifi_enabled` reports `1`. Package diagnostics show KeepADB's `WRITE_SECURE_SETTINGS` permission granted, and service diagnostics show its foreground service running. These checks inspect current state. They do not prove recovery after reboot.
-6. If continuous host reconnection is wanted, run `bin/t3-android-lab device install`. Its timer reconnects managed entries on saved ports only. General device access needs no backend or Metro. If the phone is used only for reserved sandbox sessions, the sandbox's existing reservation timer is sufficient.
-
-KeepADB recovery depends on Android version, Wi-Fi approval, permissions, and the app's network rules. When needed, arrange a reboot or network-change test with the user and verify reconnection afterward. An agent cannot re-enable a disconnected device through that same missing ADB connection.
+For a managed device that must remain available unattended, follow [Set up an unattended Android device](unattended.md). That procedure requires research for the actual manufacturer, model, and OS, followed by checks on the device and a recovery test. Use it for unattended sandbox devices too. Other managed devices can use it when continuous availability is wanted. On-demand devices need only the pairing and screen verification above.
 
 ## Use a device for T3 development
 
